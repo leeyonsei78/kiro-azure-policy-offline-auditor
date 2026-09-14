@@ -3,6 +3,8 @@
 사용:
   python -m auditor <파일.txt>              # 파일 검토 → 텍스트 리포트
   python -m auditor <파일.txt> --json       # JSON 리포트
+  python -m auditor <파일.txt> --csv --out result.csv    # CSV(엑셀)로 저장
+  python -m auditor <파일.txt> --html --out report.html  # HTML(인쇄→PDF)로 저장
   cat policy.txt | python -m auditor        # stdin 입력
   python -m auditor --controls              # ISMS-P 통제항목 목록 출력
   python -m auditor --web [--port 8080]     # 웹 UI 실행(auditor.webui로 위임)
@@ -19,7 +21,7 @@ import sys
 
 from .engine import analyze
 from .knowledge_base import all_controls
-from .report import format_text
+from .report import format_csv, format_html, format_text
 
 
 def _read_input(path: str | None) -> str:
@@ -50,6 +52,9 @@ def main(argv=None) -> int:
     )
     parser.add_argument("file", nargs="?", help="검토할 Azure 정책/구성 txt 파일. 생략 시 stdin 사용")
     parser.add_argument("--json", action="store_true", help="JSON 리포트 출력")
+    parser.add_argument("--csv", action="store_true", help="CSV(엑셀용) 리포트 출력")
+    parser.add_argument("--html", action="store_true", help="HTML 리포트 출력(브라우저 인쇄로 PDF 저장)")
+    parser.add_argument("--out", "-o", metavar="FILE", help="결과를 파일로 저장(미지정 시 화면 출력)")
     parser.add_argument("--controls", action="store_true", help="ISMS-P 통제항목 목록 출력 후 종료")
     parser.add_argument("--web", action="store_true", help="웹 UI 실행")
     parser.add_argument("--host", default="127.0.0.1", help="웹 UI 호스트(--web)")
@@ -78,10 +83,28 @@ def main(argv=None) -> int:
 
     report = analyze(text)
 
-    if args.json:
-        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    # 출력 포맷 선택 (우선순위: csv > html > json > text)
+    if args.csv:
+        content = format_csv(report)
+    elif args.html:
+        content = format_html(report)
+    elif args.json:
+        content = json.dumps(report.to_dict(), ensure_ascii=False, indent=2)
     else:
-        print(format_text(report))
+        content = format_text(report)
+
+    if args.out:
+        # CSV는 BOM이 문자열에 이미 포함되어 있으므로 utf-8로 그대로 기록
+        try:
+            with open(args.out, "w", encoding="utf-8", newline="") as fh:
+                fh.write(content)
+        except OSError as e:
+            print(f"파일 저장 실패: {e}", file=sys.stderr)
+            return 2
+        print(f"저장 완료: {args.out}  (이슈 {len(report.findings)}건, 점수 {report.score()}/100 {report.grade()})",
+              file=sys.stderr)
+    else:
+        print(content)
 
     # 이슈가 있으면 종료코드 1(자동화 파이프라인에서 게이트로 활용 가능)
     return 1 if report.findings else 0

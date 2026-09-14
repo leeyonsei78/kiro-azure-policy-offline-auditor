@@ -8,6 +8,7 @@
   GET  /            -> 업로드/붙여넣기 UI (단일 HTML, 외부 CDN 없음)
   GET  /api/controls -> ISMS-P 통제항목 목록(참고용)
   POST /api/audit   -> {"text": "<az 출력 텍스트>"} → 검토 결과 JSON
+  POST /api/export  -> {"text": "...", "format": "csv"|"html"} → 해당 포맷 텍스트(다운로드/인쇄용)
 
 외부 네트워크·AI·AWS 연결 없음. 입력 텍스트는 메모리에서만 처리하고 저장하지 않는다.
 """
@@ -21,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .engine import analyze
 from .knowledge_base import all_controls
+from .report import format_csv, format_html
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +108,11 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="hint" id="meta"></div>
       </div>
     </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" onclick="downloadCsv()">⬇️ CSV 저장 (엑셀)</button>
+      <button class="btn" onclick="openPdf()">🖨️ PDF로 저장 (인쇄)</button>
+      <span class="hint">CSV는 엑셀에서 열립니다. PDF는 새 창의 인쇄 대화상자에서 "PDF로 저장"을 선택하세요.</span>
+    </div>
     <div id="findings"></div>
     <div class="hint" style="margin-top:14px">※ 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.</div>
   </div>
@@ -167,6 +174,36 @@ function render(r){
   });
   host.innerHTML=html;
 }
+
+function _tsName(ext){
+  var d=new Date();
+  function p(n){ return (n<10?'0':'')+n; }
+  return 'azure-audit_'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes())+'.'+ext;
+}
+async function downloadCsv(){
+  var text=document.getElementById('input').value;
+  if(!text.trim()){ document.getElementById('err').textContent='먼저 보안검토를 실행하세요.'; return; }
+  try{
+    var resp=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,format:'csv'})});
+    var blob=await resp.blob();
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url; a.download=_tsName('csv');
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  }catch(e){ document.getElementById('err').textContent='CSV 저장 실패: '+e; }
+}
+async function openPdf(){
+  var text=document.getElementById('input').value;
+  if(!text.trim()){ document.getElementById('err').textContent='먼저 보안검토를 실행하세요.'; return; }
+  try{
+    var resp=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,format:'html'})});
+    var html=await resp.text();
+    var w=window.open('', '_blank');
+    if(!w){ document.getElementById('err').textContent='팝업이 차단되었습니다. 팝업을 허용한 뒤 다시 시도하세요.'; return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  }catch(e){ document.getElementById('err').textContent='PDF(인쇄) 준비 실패: '+e; }
+}
 </script>
 </body>
 </html>
@@ -203,25 +240,66 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_json({"ok": False, "error": "not found"}, status=404)
 
-    def do_POST(self):
-        if self.path != "/api/audit":
-            self._send_json({"ok": False, "error": "not found"}, status=404)
-            return
+    def _send_text(self, text, content_type="text/plain; charset=utf-8", status=200):
+        body = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_payload(self):
+        """요청 본문을 dict로. (payload, error_response) 반환."""
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length > _MAX_BODY:
+            return None, "입력이 너무 큽니다(최대 8MB)."
+        raw = self.rfile.read(length).decode("utf-8", errors="replace") if length else ""
         try:
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            if length > _MAX_BODY:
-                self._send_json({"ok": False, "error": "입력이 너무 큽니다(최대 8MB)."}, status=413)
+            payload = json.loads(raw) if raw else {}
+        except ValueError:
+            payload = {"text": raw}
+        if not isinstance(payload, dict):
+            payload = {}
+        return payload, None
+
+    def do_POST(self):
+        if self.path == "/api/audit":
+            self._handle_audit()
+        elif self.path == "/api/export":
+            self._handle_export()
+        else:
+            self._send_json({"ok": False, "error": "not found"}, status=404)
+
+    def _handle_audit(self):
+        try:
+            payload, err = self._read_payload()
+            if err:
+                self._send_json({"ok": False, "error": err}, status=413)
                 return
-            raw = self.rfile.read(length).decode("utf-8", errors="replace") if length else ""
-            try:
-                payload = json.loads(raw) if raw else {}
-            except ValueError:
-                payload = {"text": raw}
-            text = payload.get("text", "") if isinstance(payload, dict) else ""
-            report = analyze(text)
+            report = analyze(payload.get("text", ""))
             self._send_json({"ok": True, "report": report.to_dict()})
         except Exception as e:  # noqa: BLE001 - UI에 오류 전달
             logger.exception("audit 실패")
+            self._send_json({"ok": False, "error": str(e)}, status=500)
+
+    def _handle_export(self):
+        """검토 결과를 CSV 또는 HTML 텍스트로 반환(브라우저에서 다운로드/인쇄)."""
+        try:
+            payload, err = self._read_payload()
+            if err:
+                self._send_json({"ok": False, "error": err}, status=413)
+                return
+            fmt = str(payload.get("format", "csv")).lower()
+            report = analyze(payload.get("text", ""))
+            if fmt == "html":
+                self._send_text(format_html(report), "text/html; charset=utf-8")
+            elif fmt == "csv":
+                # CSV(BOM 포함). 브라우저 JS가 Blob으로 받아 파일 저장.
+                self._send_text(format_csv(report), "text/csv; charset=utf-8")
+            else:
+                self._send_json({"ok": False, "error": "지원하지 않는 format"}, status=400)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("export 실패")
             self._send_json({"ok": False, "error": str(e)}, status=500)
 
 

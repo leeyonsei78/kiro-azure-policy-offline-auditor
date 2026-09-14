@@ -75,7 +75,12 @@ python -m auditor --web                      # http://127.0.0.1:8080
 브라우저에서 `http://127.0.0.1:8080` 접속 → Azure 정책 텍스트를 **붙여넣기**하거나 **파일 불러오기** → **보안검토 실행**.
 결과에 점수·등급, 통제항목별 이슈, 개선 제안이 표시됩니다.
 
+검토 결과 아래의 버튼으로 리포트를 저장할 수 있습니다:
+- **⬇️ CSV 저장 (엑셀)** — 이슈 목록을 CSV로 내려받아 Excel에서 열기(한글 정상)
+- **🖨️ PDF로 저장 (인쇄)** — 새 창에 리포트가 열리며, 인쇄 대화상자에서 "대상 → PDF로 저장"을 선택하면 PDF가 됩니다(별도 프로그램 불필요)
+
 > 8080 포트가 이미 사용 중이면 `--port 8090` 처럼 다른 포트를 지정하세요.
+> PDF 저장 시 팝업 차단이 뜨면 허용해 주세요.
 
 ## 사용법 2 — 명령줄(CLI)
 
@@ -86,12 +91,21 @@ python -m auditor policy.txt
 # JSON 리포트(자동화 연동용)
 python -m auditor policy.txt --json
 
+# CSV(엑셀)로 저장
+python -m auditor policy.txt --csv --out result.csv
+
+# HTML로 저장(브라우저로 열어 인쇄 → PDF로 저장)
+python -m auditor policy.txt --html --out report.html
+
 # 파이프 입력
 az network nsg rule list --nsg-name NSG -g RG -o json | python -m auditor
 
 # ISMS-P 통제항목 목록만 보기
 python -m auditor --controls
 ```
+
+> `--out`(또는 `-o`) 없이 `--csv`/`--html` 만 쓰면 화면에 출력됩니다.
+> `--csv` 결과는 UTF-8 BOM이 포함되어 Excel에서 한글이 깨지지 않습니다.
 
 종료 코드: `0`=이슈 없음, `1`=이슈 발견(파이프라인 게이트로 활용), `2`=실행 오류
 
