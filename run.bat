@@ -58,17 +58,19 @@ echo.
 echo ============================================================
 echo   Azure Policy Offline Auditor (ISMS-P)
 echo ============================================================
-echo   Web URL : http://%HOST%:%PORT%
+set "URL=http://%HOST%:%PORT%/"
+echo   Web URL : %URL%
 echo   Stop    : press Ctrl+C in this window (or close it)
 echo   Offline use only - no external network
 echo ============================================================
 echo.
 
-rem --- open browser after a short delay (background, avoids quoting issues) ---
-set "URL=http://%HOST%:%PORT%"
-start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 3; Start-Process '%URL%'"
+rem --- try to open the browser (best-effort; ignore if it fails) ---
+start "" "%URL%" 2>nul
 
 rem --- run web server (this window is the server console) ---
+echo (If the browser did not open, manually open: %URL% )
+echo.
 %PYEXE% -m auditor --web --host %HOST% --port %PORT%
 
 echo.
