@@ -20,15 +20,27 @@ ISMS-P 지식 베이스를 **코드에 내장**해, 망분리 환경의 검토 P
 
 ## 요구사항
 
-- Python 3.8 이상 (표준 라이브러리만 사용 — 추가 설치 불필요)
+- Python 3.8 이상 (표준 라이브러리만 사용 — pip install 불필요)
+- **Python이 없는 폐쇄망 PC**라면 아래 "설치 — Python이 없는 폐쇄망" 절차로 Python 없이도 실행할 수 있습니다.
 
-## 설치 (폐쇄망)
+## 설치 — Python이 없는 폐쇄망 (설치 불필요 방식, 권장)
 
-인터넷이 없으므로 파일만 복사하면 됩니다.
+폐쇄망 PC에 Python을 설치할 수 없을 때 사용합니다. **인터넷 되는 PC에서 준비 → 폴더째 복사**만 하면 됩니다.
 
-1. 이 폴더(`azure-policy-offline-auditor/`)를 검토 PC로 복사 (USB·내부망 파일서버 등)
-2. Python 3.8+ 설치되어 있는지 확인: `python --version`
-3. 끝. (pip install 불필요)
+1. **인터넷 되는 Windows PC**에서 이 폴더의 **`setup-python.bat` 을 더블클릭**
+   - Windows용 임베디드 Python(설치 불필요 버전, 약 10MB)을 자동으로 내려받아 `python\` 폴더에 넣습니다.
+   - (사내 프록시로 다운로드가 막히면, 스크립트가 안내하는 URL을 브라우저로 받아 폴더에 두고 다시 실행)
+2. **이 폴더 전체**(이제 `python\` 포함)를 USB 등으로 **폐쇄망 PC에 복사**
+3. 폐쇄망 PC에서 **`run.bat` 더블클릭** → 끝 (동봉된 Python을 자동으로 사용)
+
+> `run.bat` 은 ① 폴더 안 `python\python.exe` → ② 시스템 `py`/`python` 순으로 자동 탐지합니다.
+> 그래서 임베디드 Python을 넣어두면 폐쇄망 PC에 아무 설치 없이 바로 실행됩니다.
+
+## 설치 — Python이 이미 있는 경우
+
+1. 이 폴더를 검토 PC로 복사 (USB·내부망 파일서버 등)
+2. Python 3.8+ 확인: `python --version`
+3. `run.bat`(Windows) 더블클릭 또는 `./run.sh`(mac/Linux). 끝. (pip install 불필요)
 
 ## 사용법 1 — 웹 UI (권장)
 
