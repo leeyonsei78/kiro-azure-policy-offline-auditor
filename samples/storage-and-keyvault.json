@@ -1,0 +1,26 @@
+[
+  {
+    "name": "corpdatalake01",
+    "type": "Microsoft.Storage/storageAccounts",
+    "location": "koreacentral",
+    "supportsHttpsTrafficOnly": false,
+    "allowBlobPublicAccess": true,
+    "minimumTlsVersion": "TLS1_0"
+  },
+  {
+    "name": "corpbackup02",
+    "type": "Microsoft.Storage/storageAccounts",
+    "location": "koreacentral",
+    "supportsHttpsTrafficOnly": true,
+    "allowBlobPublicAccess": false,
+    "minimumTlsVersion": "TLS1_2"
+  },
+  {
+    "name": "corp-kv-prod",
+    "type": "Microsoft.KeyVault/vaults",
+    "properties": {
+      "enableSoftDelete": false,
+      "enablePurgeProtection": false
+    }
+  }
+]

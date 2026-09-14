@@ -1,0 +1,6 @@
+[
+  { "principalName": "alice@contoso.com", "roleDefinitionName": "Owner", "scope": "/subscriptions/xxxx" },
+  { "principalName": "bob@contoso.com", "roleDefinitionName": "Owner", "scope": "/subscriptions/xxxx" },
+  { "principalName": "carol@contoso.com", "roleDefinitionName": "Contributor", "scope": "/subscriptions/xxxx/resourceGroups/rg-app" },
+  { "principalName": "readonly-team", "roleDefinitionName": "Reader", "scope": "/subscriptions/xxxx" }
+]

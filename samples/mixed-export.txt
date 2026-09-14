@@ -1,0 +1,15 @@
+# 여러 az 명령 출력을 한 파일에 이어붙인 예시 (실무에서 흔한 형태)
+# az sql db list ... -o json
+[
+  { "name": "sales-db", "type": "Microsoft.Sql/servers/databases", "publicNetworkAccess": "Enabled" }
+]
+
+# az sql db tde show ... -o json
+{ "name": "sales-db-tde", "status": "Disabled" }
+
+# 아래는 표/텍스트 형태 출력 (JSON 아님) - 텍스트 폴백 검사 대상
+Diagnostic Settings for subscription: []
+Recovery Services Vault backup items:
+  item: vm-app01   lastBackupStatus: Failed
+  vault storageType: LRS
+Defender for Cloud assessments: 12 Unhealthy findings

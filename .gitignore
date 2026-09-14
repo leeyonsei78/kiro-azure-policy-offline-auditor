@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 검토 입력/출력물(민감할 수 있음 — 저장소에 올리지 않음)
+*.local.txt
+reports/
