@@ -40,11 +40,11 @@ if not defined PYEXE (
   echo ============================================================
   echo   [NOTICE] Python not found on this PC.
   echo ============================================================
-  echo   Offline option (no install needed):
-  echo    1) On an internet PC, run setup-python.bat in this folder.
+  echo   Offline option ^(no install needed^):
+  echo    1^) On an internet PC, run setup-python.bat in this folder.
   echo       ^(downloads embeddable Python into the python\ folder^)
-  echo    2) Copy this whole folder to the offline PC via USB.
-  echo    3) Double-click run.bat again on the offline PC.
+  echo    2^) Copy this whole folder to the offline PC via USB.
+  echo    3^) Double-click run.bat again on the offline PC.
   echo.
   echo   Or install Python 3.8+ ^(check "Add Python to PATH"^):
   echo       https://www.python.org/downloads/
