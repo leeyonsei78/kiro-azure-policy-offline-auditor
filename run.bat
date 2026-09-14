@@ -64,8 +64,9 @@ echo   Offline use only - no external network
 echo ============================================================
 echo.
 
-rem --- open browser after 3s (give server time to start) ---
-start "" /b cmd /c "timeout /t 3 >nul & start "" http://%HOST%:%PORT%"
+rem --- open browser after a short delay (background, avoids quoting issues) ---
+set "URL=http://%HOST%:%PORT%"
+start "" /b powershell -NoProfile -Command "Start-Sleep -Seconds 3; Start-Process '%URL%'"
 
 rem --- run web server (this window is the server console) ---
 %PYEXE% -m auditor --web --host %HOST% --port %PORT%
