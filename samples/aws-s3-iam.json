@@ -1,0 +1,38 @@
+[
+  {
+    "Name": "corp-datalake",
+    "PublicAccessBlockConfiguration": {
+      "BlockPublicAcls": false,
+      "IgnorePublicAcls": false,
+      "BlockPublicPolicy": false,
+      "RestrictPublicBuckets": false
+    },
+    "ServerSideEncryptionConfiguration": null
+  },
+  {
+    "Name": "corp-logs",
+    "PublicAccessBlockConfiguration": {
+      "BlockPublicAcls": true,
+      "IgnorePublicAcls": true,
+      "BlockPublicPolicy": true,
+      "RestrictPublicBuckets": true
+    }
+  },
+  {
+    "PolicyName": "dev-admin-policy",
+    "PolicyDocument": {
+      "Version": "2012-10-17",
+      "Statement": [
+        { "Effect": "Allow", "Action": "*", "Resource": "*" }
+      ]
+    }
+  },
+  {
+    "UserName": "svc-batch",
+    "MFAActive": false
+  },
+  {
+    "UserName": "readonly-auditor",
+    "MFAActive": true
+  }
+]

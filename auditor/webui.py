@@ -35,7 +35,7 @@ INDEX_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Azure 정책 오프라인 보안검토 (ISMS-P)</title>
+<title>클라우드 정책 오프라인 보안검토 (ISMS-P · AWS/Azure)</title>
 <style>
   :root{ --bg:#0e1626; --panel:#152036; --panel2:#1c2942; --border:#2a3a5a; --text:#e8eefc;
     --muted:#93a3c4; --accent:#4da3ff; --crit:#ff5d6c; --high:#ff9f43; --med:#ffd43b; --low:#4dabf7; --info:#8a9bbd; }
@@ -67,6 +67,7 @@ INDEX_HTML = """<!DOCTYPE html>
   .sev.CRITICAL{ background:var(--crit); } .sev.HIGH{ background:var(--high); }
   .sev.MEDIUM{ background:var(--med); } .sev.LOW{ background:var(--low); } .sev.INFO{ background:var(--info); }
   .code{ font-size:11px; color:var(--muted); border:1px solid var(--border); border-radius:6px; padding:2px 6px; }
+  .platbadge{ font-size:11px; font-weight:700; color:#06122a; padding:2px 8px; border-radius:6px; }
   .ftitle{ font-weight:600; }
   .meta{ color:var(--muted); font-size:13px; margin-top:6px; line-height:1.5; }
   .meta b{ color:var(--text); }
@@ -80,14 +81,14 @@ INDEX_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>🛡️ Azure 정책 오프라인 보안검토 <span class="sub">(ISMS-P 클라우드 인프라 기준)</span></h1>
-  <div class="sub">Azure CLI(<code>az ...</code>)로 추출한 정책·구성 텍스트를 붙여넣거나 업로드하면, <b>인터넷·AI 없이</b> 이슈를 찾고 개선안을 제안합니다.</div>
+  <h1>🛡️ 클라우드 정책 오프라인 보안검토 <span class="sub">(ISMS-P · AWS/Azure)</span></h1>
+  <div class="sub">AWS(<code>aws ...</code>)/Azure(<code>az ...</code>) CLI로 추출한 정책·구성 텍스트를 붙여넣거나 업로드하면, <b>인터넷·AI 없이</b> 이슈를 찾고 개선안을 제안합니다. 플랫폼은 자동으로 구별됩니다.</div>
 </header>
 <main>
   <div class="card">
     <div class="banner">🔒 폐쇄망 전용 · 외부 전송 없음 · 입력은 서버 메모리에서만 처리되고 저장되지 않습니다.
       <br>입력 예: <code>az network nsg rule list ... -o json</code>, <code>az storage account show ...</code>, <code>az role assignment list ...</code> 등의 출력(여러 명령 출력을 이어붙여도 됨).</div>
-    <label>Azure 정책/구성 텍스트 (붙여넣기)</label>
+    <label>AWS/Azure 정책·구성 텍스트 (붙여넣기)</label>
     <textarea id="input" placeholder='예) [{"name":"allow-ssh","access":"Allow","direction":"Inbound","sourceAddressPrefix":"*","destinationPortRange":"22"}]'></textarea>
     <div class="row">
       <input type="file" id="file" accept=".txt,.json,.log,.tsv">
@@ -106,6 +107,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div id="grade-line" style="font-size:15px;font-weight:700"></div>
         <div class="counts" id="counts"></div>
         <div class="hint" id="meta"></div>
+        <div class="row" id="plat-filter" style="display:none;margin-top:8px"></div>
       </div>
     </div>
     <div class="row" style="margin-top:12px">
@@ -138,31 +140,70 @@ async function runAudit(){
     render(data.report);
   }catch(e){ document.getElementById('err').textContent='요청 실패: '+e; }
 }
+var LAST_REPORT=null;
+var PLAT_FILTER='all';
+function platLabel(p){ return p==='aws'?'AWS':(p==='azure'?'Azure':(p||'').toUpperCase()); }
+function setPlatFilter(p){ PLAT_FILTER=p; renderFindings(LAST_REPORT); updateFilterButtons(); }
+function updateFilterButtons(){
+  var wrap=document.getElementById('plat-filter'); if(!wrap) return;
+  Array.prototype.forEach.call(wrap.querySelectorAll('button'), function(b){
+    b.style.opacity = (b.getAttribute('data-p')===PLAT_FILTER)?'1':'0.5';
+  });
+}
 function render(r){
+  LAST_REPORT=r; PLAT_FILTER='all';
   document.getElementById('result-card').style.display='block';
   var sc=document.getElementById('score'); sc.textContent=r.score; sc.className='score grade-'+r.grade;
   document.getElementById('grade-line').textContent='등급 '+r.grade+'  /  100점';
   var c=r.severity_counts||{};
   var order=['CRITICAL','HIGH','MEDIUM','LOW','INFO'];
-  document.getElementById('counts').innerHTML=order.filter(k=>c[k]).map(k=>'<span><b>'+k+'</b> '+c[k]+'</span>').join('') || '<span class="empty">이슈 없음</span>';
+  var sevHtml=order.filter(k=>c[k]).map(k=>'<span><b>'+k+'</b> '+c[k]+'</span>').join('');
+  var pc=r.platform_counts||{};
+  var platHtml=Object.keys(pc).sort().map(k=>'<span style="color:'+(k==='aws'?'#ff9900':'#4da3ff')+'"><b>'+platLabel(k)+'</b> '+pc[k]+'</span>').join('');
+  document.getElementById('counts').innerHTML=(sevHtml+' '+platHtml) || '<span class="empty">이슈 없음</span>';
   document.getElementById('meta').textContent='입력형식: '+r.input_kind+' · 파싱 리소스: '+r.parsed_resources+'개 · 발견 이슈: '+r.total_findings+'건';
 
+  // 플랫폼 필터 버튼(2개 플랫폼 모두 있을 때만 표시)
+  var plats=(r.detected_platforms||[]);
+  var fbar=document.getElementById('plat-filter');
+  if(plats.length>1){
+    fbar.style.display='flex';
+    fbar.innerHTML='<span class="hint" style="margin-right:6px">플랫폼 필터:</span>'+
+      '<button class="btn" data-p="all" onclick="setPlatFilter(\\'all\\')">전체</button>'+
+      plats.map(function(p){ return '<button class="btn" data-p="'+p+'" onclick="setPlatFilter(\\''+p+'\\')">'+platLabel(p)+'</button>'; }).join('');
+  } else { fbar.style.display='none'; fbar.innerHTML=''; }
+
+  renderFindings(r);
+  updateFilterButtons();
+}
+function renderFindings(r){
   var host=document.getElementById('findings');
   if(!r.findings || !r.findings.length){
     host.innerHTML='<div class="sec">결과</div><div class="finding empty">'+esc((r.notes&&r.notes[0])||'탐지된 이슈가 없습니다.')+'</div>';
     return;
   }
-  // 통제항목별 그룹
-  var groups={};
-  r.findings.forEach(function(f){ (groups[f.control_code]=groups[f.control_code]||[]).push(f); });
-  var codes=Object.keys(groups).sort(function(a,b){ return a.split('.').map(Number) > b.split('.').map(Number) ? 1 : -1; });
+  var items=r.findings.filter(function(f){ return PLAT_FILTER==='all' || f.platform===PLAT_FILTER; });
+  // (통제항목, 플랫폼)별 그룹
+  var groups={}; var keyOrder=[];
+  items.forEach(function(f){
+    var key=f.control_code+'|'+f.platform;
+    if(!groups[key]){ groups[key]=[]; keyOrder.push(key); }
+    groups[key].push(f);
+  });
+  keyOrder.sort(function(a,b){
+    var ca=a.split('|')[0].split('.').map(Number), cb=b.split('|')[0].split('.').map(Number);
+    for(var i=0;i<3;i++){ if((ca[i]||0)!==(cb[i]||0)) return (ca[i]||0)-(cb[i]||0); }
+    return a.split('|')[1].localeCompare(b.split('|')[1]);
+  });
   var html='';
-  codes.forEach(function(code){
-    var fs=groups[code];
-    html+='<div class="sec">['+esc(code)+'] '+esc(fs[0].control_domain||'')+' — '+fs.length+'건</div>';
+  keyOrder.forEach(function(key){
+    var fs=groups[key]; var code=key.split('|')[0]; var plat=fs[0].platform;
+    var pcolor=plat==='aws'?'#ff9900':'#4da3ff';
+    html+='<div class="sec"><span class="platbadge" style="background:'+pcolor+'">'+platLabel(plat)+'</span> ['+esc(code)+'] '+esc(fs[0].control_domain||'')+' — '+fs.length+'건</div>';
     fs.forEach(function(f){
       html+='<div class="finding"><div class="ftop">'+
         '<span class="sev '+esc(f.severity)+'">'+esc(f.severity)+'</span>'+
+        '<span class="platbadge" style="background:'+pcolor+'">'+platLabel(f.platform)+'</span>'+
         '<span class="code">'+esc(f.control_code)+'</span>'+
         '<span class="ftitle">'+esc(f.title)+'</span></div>';
       if(f.resource) html+='<div class="meta"><b>대상:</b> '+esc(f.resource)+'</div>';
@@ -172,7 +213,7 @@ function render(r){
       html+='</div>';
     });
   });
-  host.innerHTML=html;
+  host.innerHTML=html || '<div class="finding empty">선택한 플랫폼의 이슈가 없습니다.</div>';
 }
 
 function _tsName(ext){
@@ -304,7 +345,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Azure 정책 오프라인 보안검토 - 로컬 웹 UI")
+    parser = argparse.ArgumentParser(description="클라우드 정책 오프라인 보안검토(AWS/Azure) - 로컬 웹 UI")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args(argv)

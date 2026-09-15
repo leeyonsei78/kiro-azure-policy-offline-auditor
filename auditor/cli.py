@@ -48,9 +48,9 @@ def _print_controls(as_json: bool) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="auditor",
-        description="Azure 정책 오프라인 보안검토 (ISMS-P 기준, 폐쇄망 전용)",
+        description="클라우드 정책 오프라인 보안검토 (ISMS-P 기준, AWS/Azure, 폐쇄망 전용)",
     )
-    parser.add_argument("file", nargs="?", help="검토할 Azure 정책/구성 txt 파일. 생략 시 stdin 사용")
+    parser.add_argument("file", nargs="?", help="검토할 AWS/Azure 정책·구성 txt 파일. 생략 시 stdin 사용")
     parser.add_argument("--json", action="store_true", help="JSON 리포트 출력")
     parser.add_argument("--csv", action="store_true", help="CSV(엑셀용) 리포트 출력")
     parser.add_argument("--html", action="store_true", help="HTML 리포트 출력(브라우저 인쇄로 PDF 저장)")

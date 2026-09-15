@@ -1,12 +1,13 @@
 """오프라인 판정 엔진 (폐쇄망 전제, 표준 라이브러리만).
 
-Azure CLI 출력 텍스트를 인터넷/AI 없이 정규식·구조 분석으로 검토해
-ISMS-P 통제항목 기준의 이슈(Finding)를 산출한다.
+AWS/Azure CLI 출력 텍스트를 인터넷/AI 없이 정규식·구조 분석으로 검토해
+ISMS-P 통제항목 기준의 이슈(Finding)를 산출한다. 각 이슈에는 대상 플랫폼(aws/azure)이
+자동으로 태깅되어 화면/리포트에서 구별된다.
 
 설계 원칙(ai-security-suite의 *_offline_engine 패턴 참고):
 - JSON으로 파싱되는 입력은 실제 객체 구조를 따라가며 판정(오탐 최소화).
 - 명시적 차단 규칙(access=Deny 등)은 '과도 허용'으로 오인하지 않도록 제외.
-- 판정 근거/개선안은 knowledge_base(ISMS-P)의 criteria/fix에 연결.
+- 판정 근거/개선안은 knowledge_base(ISMS-P)의 플랫폼별 criteria/fix에 연결.
 - 어떤 조치도 실행하지 않는다 — 검토와 제안만.
 """
 
@@ -14,17 +15,13 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
 
-from .knowledge_base import control
+from .knowledge_base import control_for
 from .models import AuditReport, Finding, Severity
 from .parser import iter_dicts, parse
 
-# --- 공통 정규식 ------------------------------------------------------------
+# --- 공통 정규식/상수 -------------------------------------------------------
 _OPEN_ANY_RE = re.compile(r"(0\.0\.0\.0/0|::/0|\bany\b|internet|^\*$|\"\*\")", re.I)
-_DENY_RE = re.compile(r'"?(?:access|action|ruleaction|effect)"?\s*[:=]\s*"?(?:deny|reject|drop|block)"?', re.I)
-_INBOUND_RE = re.compile(r'"?direction"?\s*[:=]\s*"?inbound"?', re.I)
-_OUTBOUND_RE = re.compile(r'"?direction"?\s*[:=]\s*"?outbound"?', re.I)
 
 _SENSITIVE_PORTS = {
     "22": "SSH", "3389": "RDP", "3306": "MySQL", "5432": "PostgreSQL",
@@ -33,14 +30,10 @@ _SENSITIVE_PORTS = {
 _MGMT_PORTS = {"22", "3389", "445", "23"}
 
 
-def _kb(code: str) -> dict:
-    return control(code) or {"domain": "", "fix": "", "criteria": ""}
-
-
 def _finding(code: str, issue_type: str, severity: Severity, title: str,
-             description: str, *, evidence: str = "", resource: str = "",
-             recommendation: str = "") -> Finding:
-    kb = _kb(code)
+             description: str, *, platform: str = "azure", evidence: str = "",
+             resource: str = "", recommendation: str = "") -> Finding:
+    kb = control_for(code, platform)
     return Finding(
         control_code=code,
         control_domain=kb.get("domain", ""),
@@ -51,6 +44,7 @@ def _finding(code: str, issue_type: str, severity: Severity, title: str,
         recommendation=recommendation or kb.get("fix", ""),
         evidence=(evidence or "")[:300],
         resource=resource or "",
+        platform=platform,
     )
 
 
@@ -71,11 +65,46 @@ def _ports_from(text: str) -> list[str]:
     return hits
 
 
-# --- 개별 검사기 ------------------------------------------------------------
+def _looks_like(d: dict, *type_hints: str) -> bool:
+    """dict가 특정 리소스 유형인지 키/type 필드로 추정."""
+    t = str(_val(d, "type", default="")).lower()
+    keys = " ".join(k.lower() for k in d.keys() if isinstance(k, str))
+    blob = t + " " + keys
+    return any(h in blob for h in type_hints)
+
+
+# ---------------------------------------------------------------------------
+# 플랫폼 자동 감지
+# ---------------------------------------------------------------------------
+_AWS_KEYS = ("groupid", "ippermissions", "cidrip", "iprotocol", "fromport", "toport",
+             "policydocument", "attachedpolicies", "publicaccessblockconfiguration",
+             "blockpublicacls", "serversideencryptionconfiguration", "mfaactive",
+             "accesskeymetadata", "awsaccountid")
+_AZURE_KEYS = ("sourceaddressprefix", "destinationportrange", "enablesoftdelete",
+               "enablepurgeprotection", "supportshttpstrafficonly", "allowblobpublicaccess",
+               "roledefinitionname", "principalname", "publicnetworkaccess", "minimumtlsversion")
+
+
+def _detect_platform(d: dict) -> str | None:
+    """단일 dict의 플랫폼(aws/azure) 추정. 판단 근거 없으면 None."""
+    flat = json.dumps(d, ensure_ascii=False).lower()
+    if "microsoft." in flat or "arn:aws" in flat:
+        return "azure" if "microsoft." in flat and "arn:aws" not in flat else "aws"
+    az = sum(1 for k in _AZURE_KEYS if k in flat)
+    aws = sum(1 for k in _AWS_KEYS if k in flat)
+    if aws > az:
+        return "aws"
+    if az > aws:
+        return "azure"
+    return None
+
+
+# ===========================================================================
+# Azure 검사기
+# ===========================================================================
 def _check_nsg_rule_obj(rule: dict, findings: list[Finding]) -> None:
-    """NSG 규칙 dict 하나 검사(2.6.1 인바운드 과도 허용, 2.6.7 아웃바운드 Any)."""
+    """Azure NSG 규칙(2.6.1 인바운드 과도 허용, 2.6.7 아웃바운드 Any)."""
     flat = json.dumps(rule, ensure_ascii=False)
-    # 명시적 Deny면 스킵
     access = str(_val(rule, "access", "action", default="")).lower()
     if access in ("deny", "reject", "drop", "block"):
         return
@@ -93,11 +122,10 @@ def _check_nsg_rule_obj(rule: dict, findings: list[Finding]) -> None:
             "2.6.7", "nsg_outbound_any", Severity.MEDIUM,
             f"NSG 아웃바운드가 Any로 허용됨: {name or '(이름없음)'}",
             "NSG 아웃바운드 규칙의 목적지가 Any로 허용되어 내부 시스템의 인터넷 접속이 통제되지 않습니다.",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
         ))
         return
 
-    # 인바운드(또는 방향 미표기) + Any 소스
     ports_text = dst_port if dst_port else flat
     sens = _ports_from(ports_text)
     is_all_ports = dst_port.strip() in ("*", "0-65535", "") and not sens
@@ -109,62 +137,22 @@ def _check_nsg_rule_obj(rule: dict, findings: list[Finding]) -> None:
             Severity.CRITICAL if worst else Severity.HIGH,
             f"NSG 인바운드 전체공개 + 민감포트: {name or '(이름없음)'}",
             f"출발지가 전체공개(Any/0.0.0.0/0)인 인바운드 규칙이 민감 포트 {svc}를 허용합니다.",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
         ))
     elif is_all_ports:
         findings.append(_finding(
             "2.6.1", "nsg_open_all_ports", Severity.HIGH,
             f"NSG 인바운드 전체공개(모든 포트): {name or '(이름없음)'}",
             "출발지가 전체공개(Any/0.0.0.0/0)이고 대상 포트가 전체 범위로 열려 있습니다.",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
         ))
     else:
         findings.append(_finding(
             "2.6.1", "nsg_open_any", Severity.MEDIUM,
             f"NSG 인바운드 출발지 전체공개: {name or '(이름없음)'}",
             "인바운드 규칙의 출발지가 전체공개(Any/0.0.0.0/0)로 설정되어 있습니다.",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
         ))
-
-
-def _looks_like(d: dict, *type_hints: str) -> bool:
-    """dict가 특정 리소스 유형인지 키/type 필드로 추정."""
-    t = str(_val(d, "type", default="")).lower()
-    keys = " ".join(k.lower() for k in d.keys() if isinstance(k, str))
-    blob = (t + " " + keys)
-    return any(h in blob for h in type_hints)
-
-
-def _check_object(d: dict, findings: list[Finding], seen: set) -> None:
-    """단일 리소스 dict를 유형 추정 후 해당 검사기로 라우팅."""
-    # NSG 규칙: sourceAddressPrefix/destinationPortRange/direction 키가 있으면 규칙으로 간주
-    if _val(d, "sourceAddressPrefix", "sourceAddressPrefixes") is not None or (
-        _val(d, "direction") is not None and _val(d, "access") is not None
-    ):
-        _check_nsg_rule_obj(d, findings)
-
-    # Storage account
-    if _looks_like(d, "storage") or _val(d, "supportsHttpsTrafficOnly", "enableHttpsTrafficOnly") is not None \
-            or _val(d, "allowBlobPublicAccess") is not None:
-        _check_storage_obj(d, findings)
-
-    # SQL DB / TDE
-    if _looks_like(d, "sql/servers", "microsoft.sql") or _val(d, "publicNetworkAccess") is not None \
-            or "tde" in json.dumps(d).lower():
-        _check_sql_obj(d, findings)
-
-    # Key Vault — name/type가 있는 '리소스 레벨' dict에서만 검사(중첩 properties 조각은 상위에서 이미 처리)
-    is_vault_resource = _looks_like(d, "keyvault", "vaults") or (
-        _val(d, "enableSoftDelete", "enablePurgeProtection") is not None
-        and (_val(d, "name") is not None or _val(d, "type") is not None)
-    )
-    if is_vault_resource:
-        _check_keyvault_obj(d, findings, seen)
-
-    # RBAC role assignment
-    role = str(_val(d, "roleDefinitionName", "role", default=""))
-    if role:
-        _check_rbac_obj(d, role, findings, seen)
 
 
 def _check_storage_obj(d: dict, findings: list[Finding]) -> None:
@@ -176,7 +164,7 @@ def _check_storage_obj(d: dict, findings: list[Finding]) -> None:
             "2.7.1", "storage_https_disabled", Severity.HIGH,
             f"Storage HTTPS 전용 미설정: {name or '(이름없음)'}",
             "Storage Account가 HTTP 평문 전송을 허용합니다(supportsHttpsTrafficOnly=false).",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
             recommendation="Storage Account의 '보안 전송 필수(HTTPS only)'를 활성화하고, 최소 TLS 버전을 1.2로 설정하세요.",
         ))
     public = _val(d, "allowBlobPublicAccess")
@@ -185,7 +173,7 @@ def _check_storage_obj(d: dict, findings: list[Finding]) -> None:
             "2.7.1", "storage_public_blob", Severity.HIGH,
             f"Storage 퍼블릭 Blob 접근 허용: {name or '(이름없음)'}",
             "Storage Account가 익명 Blob 퍼블릭 접근을 허용합니다(allowBlobPublicAccess=true).",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
             recommendation="allowBlobPublicAccess를 false로 설정하고, 필요한 공유는 SAS·Private Endpoint로 대체하세요.",
         ))
     tls = str(_val(d, "minimumTlsVersion", "minimumTLSVersion", default=""))
@@ -194,7 +182,7 @@ def _check_storage_obj(d: dict, findings: list[Finding]) -> None:
             "2.7.1", "storage_weak_tls", Severity.MEDIUM,
             f"Storage 약한 TLS 버전: {name or '(이름없음)'} ({tls})",
             f"Storage Account 최소 TLS 버전이 {tls}로 취약합니다(TLS 1.2 미만).",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
             recommendation="최소 TLS 버전을 1.2 이상으로 설정하세요.",
         ))
 
@@ -202,7 +190,6 @@ def _check_storage_obj(d: dict, findings: list[Finding]) -> None:
 def _check_sql_obj(d: dict, findings: list[Finding]) -> None:
     name = str(_val(d, "name", default="") or "")
     flat = json.dumps(d, ensure_ascii=False)
-    # TDE 상태
     tde = _val(d, "state", "status")
     tde_ctx = "tde" in flat.lower() or "transparentdataencryption" in flat.lower()
     if tde_ctx and str(tde).lower() in ("disabled", "false", "off"):
@@ -210,7 +197,7 @@ def _check_sql_obj(d: dict, findings: list[Finding]) -> None:
             "2.7.1", "sql_tde_disabled", Severity.HIGH,
             f"SQL TDE 비활성화: {name or '(이름없음)'}",
             "SQL Database의 투명한 데이터 암호화(TDE)가 비활성화되어 저장 데이터가 암호화되지 않습니다.",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
         ))
     pub = str(_val(d, "publicNetworkAccess", default=""))
     if pub.lower() in ("enabled", "true"):
@@ -218,7 +205,7 @@ def _check_sql_obj(d: dict, findings: list[Finding]) -> None:
             "2.6.1", "sql_public_access", Severity.HIGH,
             f"SQL 퍼블릭 네트워크 접근 허용: {name or '(이름없음)'}",
             "SQL 서버/DB가 퍼블릭 네트워크 접근을 허용합니다(publicNetworkAccess=Enabled).",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
             recommendation="publicNetworkAccess를 Disabled로 두고 Private Endpoint·서비스 엔드포인트로만 접근하도록 제한하세요.",
         ))
 
@@ -230,7 +217,6 @@ def _check_keyvault_obj(d: dict, findings: list[Finding], seen: set) -> None:
     src = props if isinstance(props, dict) else d
     soft = _val(src, "enableSoftDelete", "softDelete")
     purge = _val(src, "enablePurgeProtection", "purgeProtection")
-    # 이름 기준(없으면 내용 해시) 중복 억제 — vault dict와 그 properties dict가 이중 순회되어도 1회만
     vault_key = name or json.dumps(src, sort_keys=True, ensure_ascii=False)[:80]
     if ("kv", vault_key) in seen:
         return
@@ -240,14 +226,14 @@ def _check_keyvault_obj(d: dict, findings: list[Finding], seen: set) -> None:
             "2.7.2", "keyvault_softdelete_off", Severity.MEDIUM,
             f"Key Vault Soft-delete 비활성화: {name or '(이름없음)'}",
             "Key Vault의 Soft-delete가 비활성화되어 키·비밀이 실수로 영구 삭제될 위험이 있습니다.",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
         ))
     if purge is False or str(purge).lower() == "false":
         findings.append(_finding(
             "2.7.2", "keyvault_purge_off", Severity.MEDIUM,
             f"Key Vault Purge Protection 비활성화: {name or '(이름없음)'}",
             "Key Vault의 Purge Protection이 비활성화되어 삭제 대기 중인 키를 강제 영구 삭제할 수 있습니다.",
-            evidence=flat, resource=name,
+            platform="azure", evidence=flat, resource=name,
         ))
 
 
@@ -268,80 +254,352 @@ def _check_rbac_obj(d: dict, role: str, findings: list[Finding], seen: set) -> N
             "2.5.5", "rbac_privileged_assignment", sev,
             f"광범위 권한 부여: {role} → {principal or '(주체미상)'}",
             f"'{role}' 같은 광범위 권한이 부여되어 있습니다. 부여 대상과 상시 활성 여부를 최소권한 관점에서 검토가 필요합니다.",
-            evidence=json.dumps(d, ensure_ascii=False), resource=principal,
+            platform="azure", evidence=json.dumps(d, ensure_ascii=False), resource=principal,
         ))
 
 
-# --- 원시 텍스트(정규식) 폴백 검사 -----------------------------------------
-def _check_raw_text(text: str, findings: list[Finding], existing_types: set) -> None:
+# ===========================================================================
+# AWS 검사기
+# ===========================================================================
+def _iter_aws_sg_rules(d: dict):
+    """AWS 보안그룹 dict에서 (rule_dict, group_id) 쌍을 순회. IpPermissions 인바운드만."""
+    gid = str(_val(d, "GroupId", "groupId", default="") or _val(d, "GroupName", "groupName", default="") or "")
+    perms = _val(d, "IpPermissions", "ipPermissions")
+    if isinstance(perms, list):
+        for p in perms:
+            if isinstance(p, dict):
+                yield p, gid
+
+
+def _aws_rule_open(perm: dict) -> bool:
+    """규칙의 IpRanges/Ipv6Ranges에 0.0.0.0/0 또는 ::/0 있는지."""
+    for key in ("IpRanges", "ipRanges"):
+        for r in (_val(perm, key) or []):
+            if isinstance(r, dict) and str(_val(r, "CidrIp", "cidrIp", default="")) in ("0.0.0.0/0",):
+                return True
+    for key in ("Ipv6Ranges", "ipv6Ranges"):
+        for r in (_val(perm, key) or []):
+            if isinstance(r, dict) and str(_val(r, "CidrIpv6", "cidrIpv6", default="")) in ("::/0",):
+                return True
+    return False
+
+
+def _aws_rule_ports(perm: dict) -> list[str]:
+    """규칙이 커버하는 민감 포트 목록. FromPort~ToPort 범위 또는 -1(all)."""
+    fp = _val(perm, "FromPort", "fromPort")
+    tp = _val(perm, "ToPort", "toPort")
+    proto = str(_val(perm, "IpProtocol", "ipProtocol", default=""))
+    if proto == "-1" or fp is None:
+        return list(_SENSITIVE_PORTS)  # 전체 허용 → 모든 민감포트 포함으로 간주
+    try:
+        fp, tp = int(fp), int(tp if tp is not None else fp)
+    except (TypeError, ValueError):
+        return []
+    return [p for p in _SENSITIVE_PORTS if fp <= int(p) <= tp]
+
+
+def _check_aws_sg_obj(d: dict, findings: list[Finding]) -> None:
+    """AWS 보안그룹(2.6.1). 0.0.0.0/0 인바운드 + 민감포트."""
+    for perm, gid in _iter_aws_sg_rules(d):
+        if not _aws_rule_open(perm):
+            continue
+        ports = _aws_rule_ports(perm)
+        flat = json.dumps(perm, ensure_ascii=False)
+        sens = [p for p in ports if p in _SENSITIVE_PORTS]
+        if sens:
+            worst = any(p in _MGMT_PORTS for p in sens)
+            svc = ", ".join(f"{p}({_SENSITIVE_PORTS[p]})" for p in sens[:6])
+            findings.append(_finding(
+                "2.6.1", "aws_sg_open_sensitive_port",
+                Severity.CRITICAL if worst else Severity.HIGH,
+                f"보안그룹 인바운드 전체공개 + 민감포트: {gid or '(SG미상)'}",
+                f"0.0.0.0/0(Any)에서 민감 포트 {svc} 인바운드가 허용되어 있습니다.",
+                platform="aws", evidence=flat, resource=gid,
+            ))
+        else:
+            findings.append(_finding(
+                "2.6.1", "aws_sg_open_any", Severity.MEDIUM,
+                f"보안그룹 인바운드 출발지 전체공개: {gid or '(SG미상)'}",
+                "0.0.0.0/0(Any)에서 인바운드가 허용된 보안그룹 규칙이 있습니다.",
+                platform="aws", evidence=flat, resource=gid,
+            ))
+
+
+def _check_aws_s3_obj(d: dict, findings: list[Finding]) -> None:
+    """AWS S3 버킷(2.7.1 데이터 보호). 퍼블릭 차단 미설정 / 암호화 미설정."""
+    name = str(_val(d, "Name", "name", "Bucket", "bucket", default="") or "")
+    flat = json.dumps(d, ensure_ascii=False)
+    pab = _val(d, "PublicAccessBlockConfiguration", "publicAccessBlockConfiguration")
+    if isinstance(pab, dict):
+        vals = [_val(pab, k) for k in ("BlockPublicAcls", "IgnorePublicAcls",
+                                       "BlockPublicPolicy", "RestrictPublicBuckets")]
+        if any(v is False or str(v).lower() == "false" for v in vals):
+            findings.append(_finding(
+                "2.7.1", "aws_s3_public_block_off", Severity.HIGH,
+                f"S3 퍼블릭 액세스 차단 미흡: {name or '(버킷미상)'}",
+                "S3 버킷의 퍼블릭 액세스 차단(Block Public Access) 옵션 중 일부가 false로 설정되어 있습니다.",
+                platform="aws", evidence=flat, resource=name,
+                recommendation="계정·버킷 레벨 Block Public Access 4개 옵션을 모두 활성화하세요.",
+            ))
+    # 버킷 정책/ACL 퍼블릭
+    if re.search(r'"principal"\s*:\s*"\*"|allusers|"effect"\s*:\s*"allow".{0,80}"principal"\s*:\s*"\*"', flat, re.I):
+        findings.append(_finding(
+            "2.7.1", "aws_s3_public_policy", Severity.HIGH,
+            f"S3 버킷 정책이 퍼블릭 허용: {name or '(버킷미상)'}",
+            "버킷 정책이 모든 주체(Principal:*)에 접근을 허용합니다.",
+            platform="aws", evidence=flat, resource=name,
+            recommendation="Principal:* 허용을 제거하고 최소 권한 주체로 제한하세요.",
+        ))
+    # 암호화 미설정
+    enc = _val(d, "ServerSideEncryptionConfiguration", "serverSideEncryptionConfiguration", "Encryption")
+    if "encryption" in flat.lower() and (enc is None or enc == {} or str(enc).lower() in ("none", "false", "disabled")):
+        findings.append(_finding(
+            "2.7.1", "aws_s3_no_encryption", Severity.MEDIUM,
+            f"S3 기본 암호화 미설정: {name or '(버킷미상)'}",
+            "S3 버킷에 기본 서버측 암호화(SSE)가 설정되어 있지 않습니다.",
+            platform="aws", evidence=flat, resource=name,
+            recommendation="버킷 기본 암호화(SSE-S3 또는 SSE-KMS)를 적용하세요.",
+        ))
+
+
+def _iter_policy_statements(doc):
+    """IAM PolicyDocument에서 Statement dict들을 순회."""
+    if isinstance(doc, str):
+        try:
+            doc = json.loads(doc)
+        except ValueError:
+            return
+    if not isinstance(doc, dict):
+        return
+    stmts = doc.get("Statement") or doc.get("statement")
+    if isinstance(stmts, dict):
+        stmts = [stmts]
+    if isinstance(stmts, list):
+        for s in stmts:
+            if isinstance(s, dict):
+                yield s
+
+
+def _stmt_is_wildcard_admin(s: dict) -> bool:
+    if str(s.get("Effect", s.get("effect", ""))).lower() != "allow":
+        return False
+    def _has_star(v):
+        if v == "*":
+            return True
+        if isinstance(v, list):
+            return "*" in v
+        return False
+    return _has_star(s.get("Action", s.get("action"))) and _has_star(s.get("Resource", s.get("resource")))
+
+
+def _check_aws_iam_obj(d: dict, findings: list[Finding], seen: set) -> None:
+    """AWS IAM(2.5.5 과다권한, 2.5.3 MFA, 2.5.6 자격증명)."""
+    flat = json.dumps(d, ensure_ascii=False)
+    name = str(_val(d, "UserName", "userName", "RoleName", "roleName",
+                    "PolicyName", "policyName", "name", default="") or "")
+
+    # 와일드카드 관리자 정책
+    doc = _val(d, "PolicyDocument", "policyDocument")
+    if doc is not None:
+        for s in _iter_policy_statements(doc):
+            if _stmt_is_wildcard_admin(s):
+                key = ("aws_admin", name, json.dumps(s, sort_keys=True)[:80])
+                if key in seen:
+                    break
+                seen.add(key)
+                findings.append(_finding(
+                    "2.5.5", "aws_iam_wildcard_admin", Severity.HIGH,
+                    f"IAM 와일드카드 관리자 권한: {name or '(정책미상)'}",
+                    "Action:* / Resource:* 를 Allow하는 광범위 권한 정책이 있습니다(최소권한 위배).",
+                    platform="aws", evidence=flat, resource=name,
+                ))
+                break
+
+    # MFA 미설정 사용자
+    mfa = _val(d, "MFAActive", "mfaActive", "MfaActive")
+    if mfa is False or str(mfa).lower() == "false":
+        if _val(d, "UserName", "userName") or "user" in flat.lower():
+            findings.append(_finding(
+                "2.5.3", "aws_iam_no_mfa", Severity.HIGH,
+                f"IAM 사용자 MFA 미설정: {name or '(사용자미상)'}",
+                "콘솔 접근이 가능한 IAM 사용자에 MFA가 설정되어 있지 않습니다.",
+                platform="aws", evidence=flat, resource=name,
+            ))
+
+    # 루트 계정 액세스 키
+    if re.search(r'"?<?root_?account>?"?|"user"\s*:\s*"<root', flat, re.I) and \
+            re.search(r'access[_ ]?key', flat, re.I) and \
+            re.search(r'"?(?:access_key_1_active|access_key_2_active)"?\s*[:=]\s*"?true', flat, re.I):
+        findings.append(_finding(
+            "2.5.6", "aws_root_access_key", Severity.CRITICAL,
+            "루트 계정 액세스 키 존재",
+            "루트 계정에 활성 액세스 키가 있습니다. 루트 키는 유출 시 계정 전체가 노출됩니다.",
+            platform="aws", evidence=flat[:200], resource="root",
+        ))
+
+
+def _check_aws_object(d: dict, findings: list[Finding], seen: set) -> None:
+    """AWS 리소스 dict 라우팅."""
+    if _val(d, "IpPermissions", "ipPermissions") is not None or (
+        _val(d, "GroupId", "groupId") is not None and _val(d, "IpPermissions", "ipPermissions") is not None
+    ):
+        _check_aws_sg_obj(d, findings)
+    if _val(d, "PublicAccessBlockConfiguration", "publicAccessBlockConfiguration") is not None \
+            or _looks_like(d, "s3", "bucket") \
+            or _val(d, "ServerSideEncryptionConfiguration") is not None:
+        _check_aws_s3_obj(d, findings)
+    if _val(d, "PolicyDocument", "policyDocument") is not None \
+            or _val(d, "MFAActive", "mfaActive") is not None \
+            or _val(d, "UserName", "userName") is not None \
+            or _val(d, "AccessKeyMetadata") is not None:
+        _check_aws_iam_obj(d, findings, seen)
+
+
+# ===========================================================================
+# Azure 리소스 dict 라우팅
+# ===========================================================================
+def _check_azure_object(d: dict, findings: list[Finding], seen: set) -> None:
+    if _val(d, "sourceAddressPrefix", "sourceAddressPrefixes") is not None or (
+        _val(d, "direction") is not None and _val(d, "access") is not None
+    ):
+        _check_nsg_rule_obj(d, findings)
+
+    if _looks_like(d, "storage") or _val(d, "supportsHttpsTrafficOnly", "enableHttpsTrafficOnly") is not None \
+            or _val(d, "allowBlobPublicAccess") is not None:
+        _check_storage_obj(d, findings)
+
+    if _looks_like(d, "sql/servers", "microsoft.sql") or _val(d, "publicNetworkAccess") is not None \
+            or "tde" in json.dumps(d).lower():
+        _check_sql_obj(d, findings)
+
+    is_vault_resource = _looks_like(d, "keyvault", "vaults") or (
+        _val(d, "enableSoftDelete", "enablePurgeProtection") is not None
+        and (_val(d, "name") is not None or _val(d, "type") is not None)
+    )
+    if is_vault_resource:
+        _check_keyvault_obj(d, findings, seen)
+
+    role = str(_val(d, "roleDefinitionName", "role", default=""))
+    if role:
+        _check_rbac_obj(d, role, findings, seen)
+
+
+def _check_object(d: dict, findings: list[Finding], seen: set, hint: str | None) -> None:
+    """플랫폼 감지 후 해당 검사기로 라우팅. hint는 전체 입력 기반 추정 플랫폼."""
+    plat = _detect_platform(d) or hint
+    if plat == "aws":
+        _check_aws_object(d, findings, seen)
+    elif plat == "azure":
+        _check_azure_object(d, findings, seen)
+    else:
+        # 판단 불가 → 양쪽 다 시도(각 검사기가 자기 키 없으면 그냥 통과)
+        _check_azure_object(d, findings, seen)
+        _check_aws_object(d, findings, seen)
+
+
+# ===========================================================================
+# 원시 텍스트(정규식) 폴백 검사
+# ===========================================================================
+def _check_raw_text(text: str, findings: list[Finding], existing_types: set, hint: str) -> None:
     """JSON 구조로 못 잡은 부분을 키워드로 보완. 이미 잡힌 유형은 중복 억제."""
     low = text.lower()
+    plat = hint or "azure"
 
-    def add(code, itype, sev, title, desc, rec=""):
+    def add(code, itype, sev, title, desc, rec="", platform=None):
         if itype in existing_types:
             return
         existing_types.add(itype)
-        findings.append(_finding(code, itype, sev, title, desc, recommendation=rec, evidence="(텍스트 패턴 감지)"))
+        findings.append(_finding(code, itype, sev, title, desc, recommendation=rec,
+                                 platform=platform or plat, evidence="(텍스트 패턴 감지)"))
 
-    # MFA / Conditional Access
+    # MFA / Conditional Access (Azure)
     if re.search(r"conditional\s*access|conditionalaccess", low):
-        if re.search(r'"state"\s*:\s*"disabled"|disabled', low) and "mfa" in low or "다단계" in text:
+        if (re.search(r'"state"\s*:\s*"disabled"|disabled', low) and "mfa" in low) or "다단계" in text:
             add("2.5.3", "mfa_ca_disabled", Severity.HIGH,
                 "MFA 강제 Conditional Access 미흡",
-                "Conditional Access 정책이 Disabled이거나 MFA 강제가 확인되지 않습니다.")
-    # 진단 설정 부재 힌트
+                "Conditional Access 정책이 Disabled이거나 MFA 강제가 확인되지 않습니다.", platform="azure")
+    # 진단 설정 부재
     if re.search(r"diagnostic[- ]?settings", low) and re.search(r"\[\s*\]|no diagnostic|없음|not configured", low):
         add("2.9.4", "diagnostic_missing", Severity.MEDIUM,
             "진단 설정(Diagnostic Settings) 미구성",
             "핵심 리소스에 진단 설정이 구성되지 않아 로그가 수집되지 않을 수 있습니다.")
+    # CloudTrail 미구성 (AWS)
+    if re.search(r"cloudtrail", low) and re.search(r"\[\s*\]|no trail|not configured|ismultiregion.{0,6}false|미구성", low):
+        add("2.9.4", "cloudtrail_missing", Severity.HIGH,
+            "CloudTrail 추적 미구성/부분 구성",
+            "다중 리전 CloudTrail 추적이 구성되지 않아 감사 로그 사각지대가 있습니다.", platform="aws")
     # 백업 실패/LRS
     if re.search(r"lastbackupstatus.{0,10}failed|backup.{0,10}failed|백업.{0,5}실패", low):
         add("2.12.1", "backup_failed", Severity.HIGH,
-            "백업 실패 항목 존재",
-            "lastBackupStatus가 Failed인 백업 항목이 있습니다.")
+            "백업 실패 항목 존재", "lastBackupStatus가 Failed인 백업 항목이 있습니다.")
     if re.search(r"\blrs\b|locallyredundant", low):
         add("2.12.1", "backup_lrs", Severity.MEDIUM,
             "백업 스토리지가 LRS(지역 중복 아님)",
             "백업 스토리지가 LocallyRedundant(LRS)로 지역 재해 시 손실 위험이 있습니다.")
-    # Defender 미해결 알림
-    if re.search(r'"status"\s*:\s*"active"|active alert', low) and "defender" in low or "security alert" in low:
+    # Defender/GuardDuty 알림
+    if (re.search(r'"status"\s*:\s*"active"|active alert', low) and "defender" in low) or "security alert" in low:
         add("2.11.3", "defender_active_alert", Severity.MEDIUM,
             "Defender for Cloud 미해결 Active Alert",
-            "Defender for Cloud에 미해결(Active) 보안 경고가 존재할 수 있습니다.")
+            "Defender for Cloud에 미해결(Active) 보안 경고가 존재할 수 있습니다.", platform="azure")
     # 취약점 Unhealthy
     if re.search(r"unhealthy", low):
         add("2.11.2", "assessment_unhealthy", Severity.MEDIUM,
             "취약점 평가 Unhealthy 항목 존재",
-            "Defender 취약점 평가에서 Unhealthy 상태 항목이 확인됩니다.")
+            "취약점 평가에서 Unhealthy 상태 항목이 확인됩니다.")
     # 패치 미적용
-    if re.search(r"assess-?patches|update.?management|patch", low) and re.search(r"critical|security|미적용|classificationstoinclude", low):
+    if re.search(r"assess-?patches|update.?management|patch", low) and \
+            re.search(r"critical|security|미적용|classificationstoinclude", low):
         add("2.10.8", "patch_pending", Severity.MEDIUM,
             "미적용 보안 패치 가능성",
             "패치 평가 결과 Critical·Security 패치가 미적용 상태일 수 있습니다.")
 
 
+# ===========================================================================
+# 엔트리
+# ===========================================================================
+def _overall_platform_hint(text: str, objects: list) -> str | None:
+    """입력 전체 기준의 플랫폼 힌트(객체별 감지가 애매할 때 사용)."""
+    votes = {"aws": 0, "azure": 0}
+    for obj in objects:
+        for d in iter_dicts(obj):
+            if isinstance(d, dict) and d:
+                p = _detect_platform(d)
+                if p:
+                    votes[p] += 1
+    low = text.lower()
+    if "arn:aws" in low or re.search(r"\baws\s+(ec2|iam|s3|cloudtrail)\b", low):
+        votes["aws"] += 1
+    if "microsoft." in low or re.search(r"\baz\s+(network|storage|keyvault|role|ad)\b", low):
+        votes["azure"] += 1
+    if votes["aws"] == 0 and votes["azure"] == 0:
+        return None
+    return "aws" if votes["aws"] > votes["azure"] else "azure"
+
+
 def analyze(text: str) -> AuditReport:
-    """입력 텍스트 전체를 검토해 AuditReport 반환."""
+    """입력 텍스트 전체를 검토해 AuditReport 반환(AWS/Azure 자동 구분)."""
     parsed = parse(text)
     report = AuditReport(input_kind=parsed["kind"], parsed_resources=parsed["object_count"])
     findings: list[Finding] = []
     seen: set = set()
 
+    hint = _overall_platform_hint(parsed["raw_text"], parsed["objects"])
+
     # 1) JSON 객체 기반 정밀 검사(중첩 dict 모두 순회)
     for obj in parsed["objects"]:
         for d in iter_dicts(obj):
             if isinstance(d, dict) and d:
-                _check_object(d, findings, seen)
+                _check_object(d, findings, seen, hint)
 
     # 2) 원시 텍스트 폴백(이미 잡힌 issue_type은 억제)
     existing_types = {f.issue_type for f in findings}
-    _check_raw_text(parsed["raw_text"], findings, existing_types)
+    _check_raw_text(parsed["raw_text"], findings, existing_types, hint or "azure")
 
     report.findings = findings
     if not findings:
         report.notes.append(
-            "탐지된 이슈가 없습니다. 입력이 비었거나, 이 엔진의 점검 대상(NSG/Storage/SQL/"
-            "Key Vault/RBAC/진단·백업·Defender 등) 형식이 아닐 수 있습니다. "
-            "az CLI를 '-o json'으로 내보낸 출력을 함께 넣으면 정밀도가 높아집니다."
+            "탐지된 이슈가 없습니다. 입력이 비었거나, 이 엔진의 점검 대상"
+            "(AWS: SG/S3/IAM, Azure: NSG/Storage/SQL/Key Vault/RBAC, 공통: 진단·백업 등) "
+            "형식이 아닐 수 있습니다. CLI를 '-o json'으로 내보낸 출력을 넣으면 정밀도가 높아집니다."
         )
     return report

@@ -52,6 +52,7 @@ class Finding:
         description: 왜 문제인지 설명(ISMS-P 판단기준 기반).
         recommendation: 개선 방안(ISMS-P 개선방안 기반).
         resource: 관련 리소스 식별자(있으면).
+        platform: 대상 클라우드 플랫폼("aws" | "azure").
     """
 
     control_code: str
@@ -63,6 +64,7 @@ class Finding:
     recommendation: str
     evidence: str = ""
     resource: str = ""
+    platform: str = "azure"
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -102,6 +104,17 @@ class AuditReport:
             counts[f.severity.name] = counts.get(f.severity.name, 0) + 1
         return counts
 
+    def platform_counts(self) -> dict[str, int]:
+        """플랫폼(aws/azure)별 이슈 건수."""
+        counts: dict[str, int] = {}
+        for f in self.findings:
+            counts[f.platform] = counts.get(f.platform, 0) + 1
+        return counts
+
+    def detected_platforms(self) -> list[str]:
+        """발견된 이슈에 등장한 플랫폼 목록(정렬)."""
+        return sorted(self.platform_counts().keys())
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "score": self.score(),
@@ -110,6 +123,8 @@ class AuditReport:
             "parsed_resources": self.parsed_resources,
             "total_findings": len(self.findings),
             "severity_counts": self.severity_counts(),
+            "platform_counts": self.platform_counts(),
+            "detected_platforms": self.detected_platforms(),
             "findings": [
                 f.to_dict()
                 for f in sorted(self.findings, key=lambda x: x.severity, reverse=True)

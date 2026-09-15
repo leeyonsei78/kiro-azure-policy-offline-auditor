@@ -1,16 +1,17 @@
-# Azure 정책 오프라인 보안검토 (azure-policy-offline-auditor)
+# 클라우드 정책 오프라인 보안검토 (AWS/Azure) — azure-policy-offline-auditor
 
-> **폐쇄망(오프라인) 전용.** Azure CLI(`az ...`)로 추출한 정책·구성 텍스트를 업로드하면,
+> **폐쇄망(오프라인) 전용.** AWS(`aws ...`)·Azure(`az ...`) CLI로 추출한 정책·구성 텍스트를 업로드하면,
 > 인터넷·AI·클라우드 연결 없이 **ISMS-P 클라우드 인프라 통제항목** 기준으로 보안 이슈를 찾고
-> 개선 방안을 제안합니다.
+> 개선 방안을 제안합니다. **AWS/Azure는 자동으로 구별**되어 표시됩니다.
 
 ## 특징
 
 - 🔒 **완전 오프라인**: Python 표준 라이브러리만 사용. 외부 패키지·인터넷·AI API·CDN이 전혀 필요 없습니다.
-- 📋 **ISMS-P 기준**: 클라우드 인프라 직결 7개 영역·**17개 통제항목**의 판단기준/개선방안을 내장.
-- 🧩 **관대한 입력**: `az ... -o json` 출력이 가장 정확하지만, 여러 명령 출력을 한 파일에 이어붙이거나 표/텍스트가 섞여도 최대한 분석합니다.
+- ☁️ **AWS + Azure 지원**: 입력을 자동 감지해 플랫폼별(AWS/Azure) 판단기준·개선안·재점검 CLI를 적용하고, 결과에 플랫폼 뱃지·필터를 제공합니다.
+- 📋 **ISMS-P 기준**: 클라우드 인프라 직결 7개 영역·**17개 통제항목**의 판단기준/개선방안을 플랫폼별로 내장.
+- 🧩 **관대한 입력**: `aws ... `/`az ... ` 의 `-o json` 출력이 가장 정확하지만, 여러 명령 출력을 한 파일에 이어붙이거나 표/텍스트가 섞여도 최대한 분석합니다.
 - 🖥️ **웹 UI + CLI**: 브라우저에서 붙여넣기/업로드하거나, 명령줄에서 파일/파이프로 검토.
-- 🔎 **결과**: 점수·등급, 이슈별 심각도, 매핑된 ISMS-P 통제항목, **구체적 개선 제안**, 재점검용 CLI.
+- 🔎 **결과**: 점수·등급, 플랫폼(AWS/Azure)·이슈별 심각도, 매핑된 ISMS-P 통제항목, **구체적 개선 제안**, 재점검용 CLI. CSV/PDF(인쇄)로 저장 가능.
 
 ## 왜 오프라인인가
 
@@ -111,18 +112,29 @@ python -m auditor --controls
 
 ## 입력 준비 (Azure 쪽에서 먼저 추출)
 
-인터넷망 또는 관리망에서 `az` CLI로 정책을 뽑아 **txt로 저장**한 뒤, 폐쇄망 검토 PC로 옮깁니다.
-아래는 대표 예시입니다 (`-o json` 권장):
+인터넷망 또는 관리망에서 `aws`/`az` CLI로 정책을 뽑아 **txt로 저장**한 뒤, 폐쇄망 검토 PC로 옮깁니다.
+아래는 대표 예시입니다 (`-o json`/`--output json` 권장). 플랫폼은 입력 내용으로 자동 감지됩니다.
 
+**Azure:**
 ```bash
-az network nsg rule list --nsg-name <NSG> -g <RG> -o json           > nsg.txt
-az storage account list -o json                                      >> nsg.txt
-az keyvault list -o json                                             >> nsg.txt
-az role assignment list --all -o json                                >> nsg.txt
-az sql db list -g <RG> -s <SERVER> -o json                           >> nsg.txt
+az network nsg rule list --nsg-name <NSG> -g <RG> -o json           > azure.txt
+az storage account list -o json                                      >> azure.txt
+az keyvault list -o json                                             >> azure.txt
+az role assignment list --all -o json                                >> azure.txt
+az sql db list -g <RG> -s <SERVER> -o json                           >> azure.txt
 ```
 
-여러 명령 출력을 한 파일에 이어붙여도 됩니다. `samples/` 폴더의 예시 파일을 참고하세요.
+**AWS:**
+```bash
+aws ec2 describe-security-groups --output json                       > aws.txt
+aws s3api get-public-access-block --bucket <BUCKET> --output json     >> aws.txt
+aws iam list-policies --scope Local --output json                     >> aws.txt
+aws iam get-account-authorization-details --output json              >> aws.txt
+aws cloudtrail describe-trails --output json                          >> aws.txt
+```
+
+여러 명령 출력을 한 파일에 이어붙여도 되고, AWS/Azure를 섞어 넣어도 각각 구별해 분석합니다.
+`samples/` 폴더의 예시 파일(Azure: `nsg-rules.json` 등, AWS: `aws-security-groups.json`, `aws-s3-iam.json`)을 참고하세요.
 
 ## 점검하는 ISMS-P 통제항목 (17개)
 

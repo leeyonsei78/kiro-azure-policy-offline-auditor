@@ -31,8 +31,9 @@ class TestCsv(unittest.TestCase):
         # BOM 제거 후 CSV 파싱
         rows = list(csv.reader(io.StringIO(out.lstrip("\ufeff"))))
         # 요약 2줄 + 빈줄 + 헤더 + 데이터(1건: deny는 제외되므로 1건)
-        header_idx = next(i for i, r in enumerate(rows) if r and r[0] == "통제항목")
+        header_idx = next(i for i, r in enumerate(rows) if r and r[0] == "플랫폼")
         header = rows[header_idx]
+        self.assertIn("통제항목", header)
         self.assertIn("심각도", header)
         self.assertIn("개선방안", header)
         data = [r for r in rows[header_idx + 1:] if r]
@@ -74,6 +75,35 @@ class TestTextStillWorks(unittest.TestCase):
         out = format_text(analyze(_NSG))
         self.assertIn("ISMS-P", out)
         self.assertIn("점수", out)
+
+
+_AWS_SG = ('[{"GroupId":"sg-1","IpPermissions":[{"IpProtocol":"tcp","FromPort":22,'
+           '"ToPort":22,"IpRanges":[{"CidrIp":"0.0.0.0/0"}]}]}]')
+_MIXED = _AWS_SG + "\n" + _NSG
+
+
+class TestPlatformInReports(unittest.TestCase):
+    def test_csv_has_platform_column(self):
+        out = format_csv(analyze(_MIXED))
+        rows = list(csv.reader(io.StringIO(out.lstrip("\ufeff"))))
+        header = next(r for r in rows if r and r[0] == "플랫폼")
+        self.assertEqual(header[0], "플랫폼")
+        # 데이터 행에 AWS/Azure 라벨이 등장
+        body = "\n".join(",".join(r) for r in rows)
+        self.assertIn("AWS", body)
+        self.assertIn("Azure", body)
+
+    def test_text_shows_platform_labels(self):
+        out = format_text(analyze(_MIXED))
+        self.assertIn("[AWS]", out)
+        self.assertIn("[Azure]", out)
+        self.assertIn("플랫폼별:", out)
+
+    def test_html_platform_badges(self):
+        html = format_html(analyze(_MIXED))
+        self.assertIn(">AWS<", html)
+        self.assertIn(">Azure<", html)
+        self.assertIn("class='plat'", html)
 
 
 if __name__ == "__main__":

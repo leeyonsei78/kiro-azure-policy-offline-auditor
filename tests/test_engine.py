@@ -127,14 +127,78 @@ class TestReportScoring(unittest.TestCase):
             self.assertIsNotNone(control(f.control_code))
 
 
+class TestAws(unittest.TestCase):
+    def test_sg_open_ssh_critical_and_platform(self):
+        r = analyze('[{"GroupId":"sg-1","IpPermissions":[{"IpProtocol":"tcp",'
+                    '"FromPort":22,"ToPort":22,"IpRanges":[{"CidrIp":"0.0.0.0/0"}]}]}]')
+        f = next(f for f in r.findings if f.issue_type == "aws_sg_open_sensitive_port")
+        self.assertEqual(f.severity, Severity.CRITICAL)
+        self.assertEqual(f.platform, "aws")
+        self.assertEqual(f.control_code, "2.6.1")
+        self.assertTrue(f.recommendation)  # aws 플랫폼 개선방안 연결
+
+    def test_sg_internal_source_excluded(self):
+        r = analyze('[{"GroupId":"sg-2","IpPermissions":[{"IpProtocol":"tcp",'
+                    '"FromPort":443,"ToPort":443,"IpRanges":[{"CidrIp":"10.0.0.0/8"}]}]}]')
+        self.assertEqual(len(r.findings), 0)
+
+    def test_s3_public_block_and_encryption(self):
+        r = analyze('{"Name":"b","PublicAccessBlockConfiguration":{"BlockPublicAcls":false,'
+                    '"IgnorePublicAcls":false,"BlockPublicPolicy":false,"RestrictPublicBuckets":false},'
+                    '"ServerSideEncryptionConfiguration":null}')
+        types = {f.issue_type for f in r.findings}
+        self.assertIn("aws_s3_public_block_off", types)
+        self.assertIn("aws_s3_no_encryption", types)
+        self.assertTrue(all(f.platform == "aws" for f in r.findings))
+
+    def test_iam_wildcard_admin_and_mfa(self):
+        r = analyze('[{"PolicyName":"p","PolicyDocument":{"Statement":[{"Effect":"Allow",'
+                    '"Action":"*","Resource":"*"}]}},{"UserName":"u","MFAActive":false}]')
+        types = {f.issue_type for f in r.findings}
+        self.assertIn("aws_iam_wildcard_admin", types)
+        self.assertIn("aws_iam_no_mfa", types)
+
+
+class TestPlatformDetection(unittest.TestCase):
+    def test_mixed_input_both_platforms(self):
+        mixed = ('[{"GroupId":"sg-1","IpPermissions":[{"IpProtocol":"tcp","FromPort":22,'
+                 '"ToPort":22,"IpRanges":[{"CidrIp":"0.0.0.0/0"}]}]}]\n'
+                 '[{"name":"nsg","access":"Allow","direction":"Inbound",'
+                 '"sourceAddressPrefix":"*","destinationPortRange":"3389"}]')
+        r = analyze(mixed)
+        self.assertEqual(set(r.detected_platforms()), {"aws", "azure"})
+        pc = r.platform_counts()
+        self.assertEqual(pc.get("aws"), 1)
+        self.assertEqual(pc.get("azure"), 1)
+
+    def test_azure_still_tagged_azure(self):
+        r = analyze('[{"name":"nsg","access":"Allow","direction":"Inbound",'
+                    '"sourceAddressPrefix":"*","destinationPortRange":"22"}]')
+        self.assertTrue(all(f.platform == "azure" for f in r.findings))
+
+
 class TestKnowledgeBase(unittest.TestCase):
     def test_17_controls(self):
         self.assertEqual(len(all_controls()), 17)
 
-    def test_every_control_has_fields(self):
+    def test_every_control_has_platform_fields(self):
         for c in all_controls():
-            for key in ("code", "domain", "desc", "criteria", "fix", "resources"):
+            for key in ("code", "domain", "desc", "resources", "azure", "aws"):
                 self.assertTrue(c.get(key) is not None, f"{c['code']} missing {key}")
+            for plat in ("azure", "aws"):
+                for k in ("cmd", "criteria", "fix"):
+                    self.assertIn(k, c[plat], f"{c['code']} {plat} missing {k}")
+
+    def test_control_for_platform(self):
+        from auditor.knowledge_base import control_for
+        az = control_for("2.6.1", "azure")
+        aws = control_for("2.6.1", "aws")
+        self.assertEqual(az["platform"], "azure")
+        self.assertEqual(aws["platform"], "aws")
+        self.assertTrue(az["fix"] and aws["fix"])
+        self.assertNotEqual(az["fix"], aws["fix"])  # 플랫폼별로 다른 개선안
+        # 미상 코드
+        self.assertEqual(control_for("9.9.9", "aws")["criteria"], "")
 
 
 if __name__ == "__main__":
