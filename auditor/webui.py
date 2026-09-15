@@ -21,7 +21,7 @@ import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .engine import analyze
-from .knowledge_base import all_controls
+from .knowledge_base import all_controls, collection_commands
 from .report import format_csv, format_html
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,22 @@ INDEX_HTML = """<!DOCTYPE html>
   .empty{ color:var(--muted); }
   .banner{ background:#10233a; border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:12px; color:var(--muted); }
   .err{ color:var(--crit); margin-top:8px; white-space:pre-wrap; }
+  .tabs{ display:flex; gap:8px; padding:0 22px; background:var(--panel); border-bottom:1px solid var(--border); }
+  .tab{ padding:11px 18px; cursor:pointer; color:var(--muted); border-bottom:3px solid transparent; font-size:14px; }
+  .tab.active{ color:var(--text); border-bottom-color:var(--accent); font-weight:700; }
+  .toggle{ display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .toggle button{ background:var(--panel2); color:var(--muted); border:0; padding:8px 16px; cursor:pointer; font-size:13px; }
+  .toggle button.on{ color:#06122a; font-weight:700; }
+  .toggle button.on[data-p="aws"]{ background:#ff9900; }
+  .toggle button.on[data-p="azure"]{ background:#4da3ff; }
+  .search{ width:100%; background:#0b1220; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:9px 10px; font-size:13px; margin-top:10px; }
+  .cmdcard{ border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:10px; background:var(--panel2); }
+  .cmdhead{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .cmdline{ display:flex; align-items:flex-start; gap:8px; margin-top:8px; }
+  .cmdline pre{ flex:1; margin:0; white-space:pre-wrap; word-break:break-all; background:#0b1220; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:12px; color:#cfe3ff; }
+  .copybtn{ flex:none; padding:6px 10px; border-radius:6px; border:1px solid var(--border); background:var(--panel); color:var(--text); cursor:pointer; font-size:12px; white-space:nowrap; }
+  .copybtn:hover{ filter:brightness(1.15); }
+  .crit-hint{ color:var(--muted); font-size:12px; margin-top:8px; border-left:3px solid var(--med); padding-left:8px; }
 </style>
 </head>
 <body>
@@ -84,7 +100,12 @@ INDEX_HTML = """<!DOCTYPE html>
   <h1>🛡️ 클라우드 정책 오프라인 보안검토 <span class="sub">(ISMS-P · AWS/Azure)</span></h1>
   <div class="sub">AWS(<code>aws ...</code>)/Azure(<code>az ...</code>) CLI로 추출한 정책·구성 텍스트를 붙여넣거나 업로드하면, <b>인터넷·AI 없이</b> 이슈를 찾고 개선안을 제안합니다. 플랫폼은 자동으로 구별됩니다.</div>
 </header>
+<div class="tabs">
+  <div class="tab active" id="tab-audit" onclick="switchTab('audit')">🔎 보안검토</div>
+  <div class="tab" id="tab-commands" onclick="switchTab('commands')">📋 수집 명령어 가이드</div>
+</div>
 <main>
+ <div id="pane-audit">
   <div class="card">
     <div class="banner">🔒 폐쇄망 전용 · 외부 전송 없음 · 입력은 서버 메모리에서만 처리되고 저장되지 않습니다.
       <br>입력 예: <code>az network nsg rule list ... -o json</code>, <code>az storage account show ...</code>, <code>az role assignment list ...</code> 등의 출력(여러 명령 출력을 이어붙여도 됨).</div>
@@ -118,9 +139,98 @@ INDEX_HTML = """<!DOCTYPE html>
     <div id="findings"></div>
     <div class="hint" style="margin-top:14px">※ 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.</div>
   </div>
+ </div><!-- /pane-audit -->
+
+ <div id="pane-commands" style="display:none">
+  <div class="card">
+    <div class="banner">📋 <b>정보 수집 명령어 가이드</b> — 각 클라우드에서 보안 취약 여부를 확인할 정보를 뽑는 CLI 명령입니다.
+      관리망에서 아래 명령으로 정책·구성을 <code>-o json</code>(AWS는 <code>--output json</code>)으로 내보내 txt로 저장한 뒤, '보안검토' 탭에 업로드하세요.</div>
+    <div class="row" style="margin-top:12px">
+      <span class="hint">플랫폼:</span>
+      <div class="toggle" id="cmd-plat">
+        <button data-p="aws" class="on" onclick="setCmdPlatform('aws')">AWS</button>
+        <button data-p="azure" onclick="setCmdPlatform('azure')">Azure</button>
+      </div>
+      <span class="hint" id="cmd-count"></span>
+    </div>
+    <input class="search" id="cmd-search" placeholder="검색: 통제항목 코드·영역·명령어(예: 2.6.1, 보안그룹, s3, nsg)" oninput="renderCommands()">
+    <div class="err" id="cmd-err"></div>
+  </div>
+  <div id="cmd-list"></div>
+  <div class="hint" style="margin:0 0 20px">※ 명령의 &lt;NSG&gt;·&lt;RG&gt;·&lt;BUCKET&gt; 등 자리표시자는 실제 값으로 바꿔 사용하세요. 조직 계정·리전·CLI 버전·권한에 맞게 조정이 필요할 수 있습니다.</div>
+ </div><!-- /pane-commands -->
 </main>
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// ----- 탭 -----
+function switchTab(t){
+  document.getElementById('pane-audit').style.display = (t==='audit')?'block':'none';
+  document.getElementById('pane-commands').style.display = (t==='commands')?'block':'none';
+  document.getElementById('tab-audit').classList.toggle('active', t==='audit');
+  document.getElementById('tab-commands').classList.toggle('active', t==='commands');
+  if(t==='commands' && !CMD_DATA){ loadCommands(); }
+}
+
+// ----- 수집 명령어 가이드 -----
+var CMD_PLATFORM='aws';
+var CMD_DATA=null;
+function setCmdPlatform(p){
+  CMD_PLATFORM=p; CMD_DATA=null;
+  Array.prototype.forEach.call(document.querySelectorAll('#cmd-plat button'), function(b){
+    b.classList.toggle('on', b.getAttribute('data-p')===p);
+  });
+  loadCommands();
+}
+async function loadCommands(){
+  document.getElementById('cmd-err').textContent='';
+  try{
+    var r=await fetch('/api/commands?platform='+encodeURIComponent(CMD_PLATFORM));
+    var d=await r.json();
+    CMD_DATA=d.commands||[];
+    renderCommands();
+  }catch(e){ document.getElementById('cmd-err').textContent='명령어 로드 실패: '+e; }
+}
+function renderCommands(){
+  if(!CMD_DATA) return;
+  var q=(document.getElementById('cmd-search').value||'').toLowerCase().trim();
+  var platName = CMD_PLATFORM==='aws'?'AWS':'Azure';
+  var pcolor = CMD_PLATFORM==='aws'?'#ff9900':'#4da3ff';
+  var items=CMD_DATA.filter(function(c){
+    if(!q) return true;
+    return (c.code+' '+c.domain+' '+c.desc+' '+(c.cmd_lines||[]).join(' ')).toLowerCase().indexOf(q)>=0;
+  });
+  document.getElementById('cmd-count').textContent = platName+' · '+items.length+'/'+CMD_DATA.length+'개 항목';
+  var host=document.getElementById('cmd-list');
+  if(!items.length){ host.innerHTML='<div class="cmdcard empty">검색 결과가 없습니다.</div>'; return; }
+  host.innerHTML=items.map(function(c){
+    var lines=(c.cmd_lines||[]).map(function(ln,i){
+      var id='cmd_'+c.code.replace(/\\./g,'_')+'_'+i;
+      return '<div class="cmdline"><pre id="'+id+'">'+esc(ln)+'</pre>'+
+             '<button class="copybtn" onclick="copyCmd(\\''+id+'\\',this)">복사</button></div>';
+    }).join('') || '<div class="hint">이 항목은 참고 명령이 없습니다.</div>';
+    var crit = c.criteria ? '<div class="crit-hint">⚠️ 확인 포인트: '+esc(c.criteria)+'</div>' : '';
+    return '<div class="cmdcard">'+
+      '<div class="cmdhead"><span class="platbadge" style="background:'+pcolor+'">'+platName+'</span>'+
+      '<span class="code">'+esc(c.code)+'</span><b>'+esc(c.domain)+'</b></div>'+
+      '<div class="meta">'+esc(c.desc)+'</div>'+lines+crit+'</div>';
+  }).join('');
+}
+function copyCmd(id, btn){
+  var el=document.getElementById(id); if(!el) return;
+  var text=el.textContent;
+  function done(){ var t=btn.textContent; btn.textContent='복사됨 ✓'; setTimeout(function(){ btn.textContent=t; },1200); }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done, function(){ fallbackCopy(text); done(); });
+  } else { fallbackCopy(text); done(); }
+}
+function fallbackCopy(text){
+  var ta=document.createElement('textarea'); ta.value=text;
+  ta.style.position='fixed'; ta.style.left='-9999px';
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); }catch(e){}
+  document.body.removeChild(ta);
+}
 function clearAll(){ document.getElementById('input').value=''; document.getElementById('result-card').style.display='none'; document.getElementById('err').textContent=''; }
 function loadFile(){
   var f=document.getElementById('file').files[0];
@@ -278,6 +388,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(INDEX_HTML)
         elif self.path == "/api/controls":
             self._send_json({"controls": all_controls()})
+        elif self.path.startswith("/api/commands"):
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            platform = (qs.get("platform", ["aws"])[0] or "aws").lower()
+            if platform not in ("aws", "azure"):
+                platform = "aws"
+            self._send_json({"platform": platform, "commands": collection_commands(platform)})
         else:
             self._send_json({"ok": False, "error": "not found"}, status=404)
 

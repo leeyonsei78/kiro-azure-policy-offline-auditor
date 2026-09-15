@@ -200,6 +200,23 @@ class TestKnowledgeBase(unittest.TestCase):
         # 미상 코드
         self.assertEqual(control_for("9.9.9", "aws")["criteria"], "")
 
+    def test_collection_commands(self):
+        from auditor.knowledge_base import collection_commands
+        for plat in ("aws", "azure"):
+            cmds = collection_commands(plat)
+            self.assertEqual(len(cmds), 17)
+            # 모든 항목에 명령 라인이 하나 이상
+            self.assertTrue(all(c["cmd_lines"] for c in cmds), f"{plat}: 빈 명령 항목")
+            # 통제코드 오름차순 정렬
+            codes = [c["code"] for c in cmds]
+            self.assertEqual(codes, sorted(codes, key=lambda x: [int(p) for p in x.split(".")]))
+            # 플랫폼 태그
+            self.assertTrue(all(c["platform"] == plat for c in cmds))
+        # AWS와 Azure 명령이 실제로 다름(2.6.1)
+        aws_c = next(c for c in collection_commands("aws") if c["code"] == "2.6.1")
+        az_c = next(c for c in collection_commands("azure") if c["code"] == "2.6.1")
+        self.assertNotEqual(aws_c["cmd"], az_c["cmd"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

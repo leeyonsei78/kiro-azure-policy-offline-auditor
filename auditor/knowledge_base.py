@@ -375,3 +375,29 @@ def control_for(code: str, platform: str = "azure") -> dict:
 def controls_for_resource(resource_tag: str) -> list[dict]:
     """리소스 태그(nsg/rbac/storage 등)에 관련된 통제항목 목록."""
     return [c for c in CONTROLS if resource_tag in c.get("resources", [])]
+
+
+
+def collection_commands(platform: str = "azure") -> list[dict]:
+    """플랫폼(azure/aws)별 '정보 수집(점검) 명령어'를 통제항목 순으로 정리.
+
+    각 항목: {code, domain, desc, platform, cmd, cmd_lines, criteria}
+    - cmd: 원본 멀티라인 명령 문자열
+    - cmd_lines: 줄 단위로 분리한 명령 목록(화면에서 명령별 복사용, 빈 줄 제외)
+    통제항목 코드 순으로 정렬해 반환한다.
+    """
+    out: list[dict] = []
+    for c in sorted(CONTROLS, key=lambda x: [int(p) for p in x["code"].split(".")]):
+        plat = c.get(platform) or {}
+        cmd = plat.get("cmd", "") or ""
+        lines = [ln.strip() for ln in cmd.splitlines() if ln.strip()]
+        out.append({
+            "code": c["code"],
+            "domain": c.get("domain", ""),
+            "desc": c.get("desc", ""),
+            "platform": platform,
+            "cmd": cmd,
+            "cmd_lines": lines,
+            "criteria": plat.get("criteria", ""),
+        })
+    return out

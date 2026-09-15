@@ -7,6 +7,8 @@
   python -m auditor <파일.txt> --html --out report.html  # HTML(인쇄→PDF)로 저장
   cat policy.txt | python -m auditor        # stdin 입력
   python -m auditor --controls              # ISMS-P 통제항목 목록 출력
+  python -m auditor --commands              # 정보 수집 CLI 명령어(기본 AWS+Azure)
+  python -m auditor --commands --platform aws   # AWS 수집 명령어만
   python -m auditor --web [--port 8080]     # 웹 UI 실행(auditor.webui로 위임)
 
 종료 코드:
@@ -20,7 +22,7 @@ import json
 import sys
 
 from .engine import analyze
-from .knowledge_base import all_controls
+from .knowledge_base import all_controls, collection_commands
 from .report import format_csv, format_html, format_text
 
 
@@ -39,10 +41,34 @@ def _print_controls(as_json: bool) -> None:
     if as_json:
         print(json.dumps(controls, ensure_ascii=False, indent=2))
         return
-    print(f"ISMS-P 클라우드 인프라 Azure 통제항목 {len(controls)}개")
+    print(f"ISMS-P 클라우드 인프라 통제항목 (AWS/Azure) {len(controls)}개")
     print("=" * 60)
     for c in controls:
         print(f"[{c['code']}] {c['domain']} — {c['desc']}")
+
+
+_PLAT_LABEL = {"aws": "AWS", "azure": "Azure"}
+
+
+def _print_commands(platform: str | None, as_json: bool) -> None:
+    """정보 수집 CLI 명령어 가이드 출력. platform 미지정 시 AWS+Azure 모두."""
+    plats = [platform] if platform in ("aws", "azure") else ["aws", "azure"]
+    if as_json:
+        print(json.dumps({p: collection_commands(p) for p in plats}, ensure_ascii=False, indent=2))
+        return
+    for p in plats:
+        cmds = collection_commands(p)
+        print("=" * 64)
+        print(f" [{_PLAT_LABEL[p]}] 정보 수집 명령어 가이드 (ISMS-P {len(cmds)}개 통제항목)")
+        print("=" * 64)
+        for c in cmds:
+            print(f"\n[{c['code']}] {c['domain']} — {c['desc']}")
+            for ln in c["cmd_lines"]:
+                print(f"  $ {ln}")
+            if c["criteria"]:
+                print(f"  ⚠️ 확인 포인트: {c['criteria']}")
+        print()
+    print("※ <NSG>·<RG>·<BUCKET> 등 자리표시자는 실제 값으로 바꿔 사용하세요.")
 
 
 def main(argv=None) -> int:
@@ -56,6 +82,10 @@ def main(argv=None) -> int:
     parser.add_argument("--html", action="store_true", help="HTML 리포트 출력(브라우저 인쇄로 PDF 저장)")
     parser.add_argument("--out", "-o", metavar="FILE", help="결과를 파일로 저장(미지정 시 화면 출력)")
     parser.add_argument("--controls", action="store_true", help="ISMS-P 통제항목 목록 출력 후 종료")
+    parser.add_argument("--commands", action="store_true",
+                        help="정보 수집 CLI 명령어 가이드 출력 후 종료")
+    parser.add_argument("--platform", choices=["aws", "azure"],
+                        help="--commands 대상 플랫폼(미지정 시 AWS+Azure 모두)")
     parser.add_argument("--web", action="store_true", help="웹 UI 실행")
     parser.add_argument("--host", default="127.0.0.1", help="웹 UI 호스트(--web)")
     parser.add_argument("--port", type=int, default=8080, help="웹 UI 포트(--web)")
@@ -67,6 +97,10 @@ def main(argv=None) -> int:
 
     if args.controls:
         _print_controls(args.json)
+        return 0
+
+    if args.commands:
+        _print_commands(args.platform, args.json)
         return 0
 
     try:

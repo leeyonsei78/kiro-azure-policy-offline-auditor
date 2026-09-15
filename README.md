@@ -83,6 +83,16 @@ python -m auditor --web                      # http://127.0.0.1:8080
 > 8080 포트가 이미 사용 중이면 `--port 8090` 처럼 다른 포트를 지정하세요.
 > PDF 저장 시 팝업 차단이 뜨면 허용해 주세요.
 
+### 📋 수집 명령어 가이드 탭
+
+상단 **"📋 수집 명령어 가이드"** 탭에서는 각 클라우드에서 **보안 취약 여부를 확인할 정보를 뽑는 CLI 명령**을 통제항목별로 정리해 보여줍니다.
+
+- **플랫폼 토글**(AWS / Azure)로 전환
+- 통제항목별 카드에 점검 목적 + **재점검 CLI 명령**(명령마다 **복사 버튼**) + ⚠️ 확인 포인트(문제 판단 기준)
+- **검색창**으로 코드·영역·명령어(예: `2.6.1`, `보안그룹`, `s3`, `nsg`)로 필터
+
+관리망에서 이 명령들로 정책·구성을 내보내(`-o json`) txt로 저장한 뒤, '보안검토' 탭에 업로드하는 흐름입니다.
+
 ## 사용법 2 — 명령줄(CLI)
 
 ```bash
@@ -103,6 +113,13 @@ az network nsg rule list --nsg-name NSG -g RG -o json | python -m auditor
 
 # ISMS-P 통제항목 목록만 보기
 python -m auditor --controls
+
+# 정보 수집 CLI 명령어 가이드 (기본 AWS+Azure 모두)
+python -m auditor --commands
+
+# 특정 플랫폼만
+python -m auditor --commands --platform aws
+python -m auditor --commands --platform azure
 ```
 
 > `--out`(또는 `-o`) 없이 `--csv`/`--html` 만 쓰면 화면에 출력됩니다.
