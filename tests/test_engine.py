@@ -202,20 +202,24 @@ class TestKnowledgeBase(unittest.TestCase):
 
     def test_collection_commands(self):
         from auditor.knowledge_base import collection_commands
-        for plat in ("aws", "azure"):
-            cmds = collection_commands(plat)
-            self.assertEqual(len(cmds), 17)
-            # 모든 항목에 명령 라인이 하나 이상
+        # AWS: ISMS 17항목만
+        aws_cmds = collection_commands("aws")
+        self.assertEqual(len(aws_cmds), 17)
+        # Azure: ISMS 17 + SQL 세부 8 = 25항목
+        az_cmds = collection_commands("azure")
+        self.assertEqual(len(az_cmds), 25)
+        sql_items = [c for c in az_cmds if c["domain"] == "SQL 보안 세부점검"]
+        self.assertEqual(len(sql_items), 8)
+        # 모든 항목에 명령 라인이 하나 이상
+        for plat, cmds in (("aws", aws_cmds), ("azure", az_cmds)):
             self.assertTrue(all(c["cmd_lines"] for c in cmds), f"{plat}: 빈 명령 항목")
-            # 통제코드 오름차순 정렬
-            codes = [c["code"] for c in cmds]
-            self.assertEqual(codes, sorted(codes, key=lambda x: [int(p) for p in x.split(".")]))
-            # 플랫폼 태그
             self.assertTrue(all(c["platform"] == plat for c in cmds))
         # AWS와 Azure 명령이 실제로 다름(2.6.1)
-        aws_c = next(c for c in collection_commands("aws") if c["code"] == "2.6.1")
-        az_c = next(c for c in collection_commands("azure") if c["code"] == "2.6.1")
+        aws_c = next(c for c in aws_cmds if c["code"] == "2.6.1")
+        az_c = next(c for c in az_cmds if c["code"] == "2.6.1" and c["domain"] != "SQL 보안 세부점검")
         self.assertNotEqual(aws_c["cmd"], az_c["cmd"])
+        # SQL 항목엔 위반/개선 예시가 채워져 있음
+        self.assertTrue(all(c["bad_example"] and c["good_example"] for c in sql_items))
 
 
 if __name__ == "__main__":

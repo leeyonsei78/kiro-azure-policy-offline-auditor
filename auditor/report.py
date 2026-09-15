@@ -69,6 +69,10 @@ def format_text(report: AuditReport) -> str:
                 lines.append(f"      대상: {f.resource}")
             lines.append(f"      문제: {f.description}")
             lines.append(f"      개선: {f.recommendation}")
+            if getattr(f, "bad_example", ""):
+                lines.append(f"      위반 예시: {f.bad_example}")
+            if getattr(f, "good_example", ""):
+                lines.append(f"      개선 예시: {f.good_example}")
             if f.evidence:
                 lines.append(f"      근거: {f.evidence[:160]}")
             lines.append("")
@@ -97,6 +101,8 @@ _CSV_COLUMNS = [
     ("resource", "대상리소스"),
     ("description", "문제(판단기준)"),
     ("recommendation", "개선방안"),
+    ("bad_example", "위반예시"),
+    ("good_example", "개선예시"),
     ("evidence", "근거"),
 ]
 
@@ -162,6 +168,10 @@ def format_html(report: AuditReport) -> str:
             color = _SEV_COLOR.get(sev, "#555")
             evi = f"<div class='evi'>{_esc(f.evidence[:220])}</div>" if f.evidence else ""
             res = f"<div class='res'><b>대상:</b> {_esc(f.resource)}</div>" if f.resource else ""
+            bad = (f"<div class='ex bad'><b>✗ 위반 예시:</b> <code>{_esc(f.bad_example)}</code></div>"
+                   if getattr(f, "bad_example", "") else "")
+            good = (f"<div class='ex good'><b>✓ 개선 예시:</b> <code>{_esc(f.good_example)}</code></div>"
+                    if getattr(f, "good_example", "") else "")
             rows.append(
                 f"<div class='finding'>"
                 f"<div class='ftop'><span class='sev' style='background:{color}'>{_esc(sev)}</span>"
@@ -169,7 +179,7 @@ def format_html(report: AuditReport) -> str:
                 f"{res}"
                 f"<div class='p'><b>문제:</b> {_esc(f.description)}</div>"
                 f"<div class='fix'><b>개선:</b> {_esc(f.recommendation)}</div>"
-                f"{evi}</div>"
+                f"{bad}{good}{evi}</div>"
             )
         cmd_html = ""
         if ctrl.get("cmd"):
@@ -205,6 +215,10 @@ def format_html(report: AuditReport) -> str:
   .ftitle{{ font-weight:700; }}
   .res,.p,.fix{{ margin-top:3px; }}
   .fix{{ background:#f2f7ff; border-left:3px solid #2980b9; padding:4px 8px; }}
+  .ex{{ margin-top:4px; padding:4px 8px; border-radius:4px; font-size:12px; }}
+  .ex code{{ font-family:Consolas,monospace; word-break:break-all; }}
+  .ex.bad{{ background:#fdecea; border-left:3px solid #c0392b; }}
+  .ex.good{{ background:#eafaf1; border-left:3px solid #27ae60; }}
   .evi{{ font-family:Consolas,monospace; font-size:11px; color:#666; background:#f6f6f6; padding:4px 6px; margin-top:4px; word-break:break-all; }}
   .cmd{{ font-family:Consolas,monospace; font-size:11px; color:#333; background:#fafafa; border:1px dashed #bbb; padding:6px 8px; margin:6px 0; }}
   .foot{{ margin-top:24px; padding-top:8px; border-top:1px solid #ccc; color:#777; font-size:11px; }}

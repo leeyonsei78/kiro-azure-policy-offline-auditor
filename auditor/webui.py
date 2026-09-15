@@ -72,6 +72,9 @@ INDEX_HTML = """<!DOCTYPE html>
   .meta{ color:var(--muted); font-size:13px; margin-top:6px; line-height:1.5; }
   .meta b{ color:var(--text); }
   .fix{ margin-top:6px; padding:8px 10px; background:#10233a; border-radius:8px; border:1px solid var(--border); font-size:13px; }
+  .exbad{ margin-top:6px; padding:6px 10px; background:#2a1518; border-left:3px solid var(--crit); border-radius:6px; font-size:12px; }
+  .exgood{ margin-top:6px; padding:6px 10px; background:#0f2418; border-left:3px solid #37d67a; border-radius:6px; font-size:12px; }
+  .exbad code,.exgood code{ color:#cfe3ff; word-break:break-all; }
   pre{ white-space:pre-wrap; word-break:break-all; background:#0b1220; border:1px solid var(--border);
     border-radius:6px; padding:6px 8px; font-size:11px; color:var(--muted); margin:6px 0 0; }
   .empty{ color:var(--muted); }
@@ -210,10 +213,12 @@ function renderCommands(){
              '<button class="copybtn" onclick="copyCmd(\\''+id+'\\',this)">복사</button></div>';
     }).join('') || '<div class="hint">이 항목은 참고 명령이 없습니다.</div>';
     var crit = c.criteria ? '<div class="crit-hint">⚠️ 확인 포인트: '+esc(c.criteria)+'</div>' : '';
+    var bad = c.bad_example ? '<div class="exbad"><b>✗ 위반 예시:</b> <code>'+esc(c.bad_example)+'</code></div>' : '';
+    var good = c.good_example ? '<div class="exgood"><b>✓ 개선 예시:</b> <code>'+esc(c.good_example)+'</code></div>' : '';
     return '<div class="cmdcard">'+
       '<div class="cmdhead"><span class="platbadge" style="background:'+pcolor+'">'+platName+'</span>'+
       '<span class="code">'+esc(c.code)+'</span><b>'+esc(c.domain)+'</b></div>'+
-      '<div class="meta">'+esc(c.desc)+'</div>'+lines+crit+'</div>';
+      '<div class="meta">'+esc(c.desc)+'</div>'+lines+crit+bad+good+'</div>';
   }).join('');
 }
 function copyCmd(id, btn){
@@ -319,6 +324,8 @@ function renderFindings(r){
       if(f.resource) html+='<div class="meta"><b>대상:</b> '+esc(f.resource)+'</div>';
       html+='<div class="meta"><b>문제:</b> '+esc(f.description)+'</div>';
       html+='<div class="fix"><b>✅ 개선 제안:</b> '+esc(f.recommendation)+'</div>';
+      if(f.bad_example) html+='<div class="exbad"><b>✗ 위반 예시:</b> <code>'+esc(f.bad_example)+'</code></div>';
+      if(f.good_example) html+='<div class="exgood"><b>✓ 개선 예시:</b> <code>'+esc(f.good_example)+'</code></div>';
       if(f.evidence) html+='<pre>'+esc(f.evidence)+'</pre>';
       html+='</div>';
     });

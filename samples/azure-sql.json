@@ -1,0 +1,10 @@
+[
+  { "name": "current", "state": "Disabled", "transparentDataEncryption": true },
+  { "name": "sqlsrv-prod", "serverKeyType": "ServiceManaged" },
+  { "name": "sqlsrv-prod", "publicNetworkAccess": "Enabled", "privateEndpointConnections": [] },
+  { "name": "AllowAllWindowsAzureIps", "startIpAddress": "0.0.0.0", "endIpAddress": "0.0.0.0" },
+  { "name": "auditingSettings", "auditPolicy": true, "state": "Disabled", "retentionDays": 0 },
+  { "name": "advancedThreatProtection", "state": "Disabled" },
+  { "name": "vaSettings", "recurringScans": { "isEnabled": false } },
+  { "name": "ltrPolicy", "weeklyRetention": "PT0S", "monthlyRetention": "PT0S", "yearlyRetention": "PT0S" }
+]

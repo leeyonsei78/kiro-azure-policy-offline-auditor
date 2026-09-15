@@ -19,6 +19,7 @@ import re
 from .knowledge_base import control_for
 from .models import AuditReport, Finding, Severity
 from .parser import iter_dicts, parse
+from .sql_controls import sql_check
 
 # --- 공통 정규식/상수 -------------------------------------------------------
 _OPEN_ANY_RE = re.compile(r"(0\.0\.0\.0/0|::/0|\bany\b|internet|^\*$|\"\*\")", re.I)
@@ -45,6 +46,8 @@ def _finding(code: str, issue_type: str, severity: Severity, title: str,
         evidence=(evidence or "")[:300],
         resource=resource or "",
         platform=platform,
+        bad_example=kb.get("bad_example", ""),
+        good_example=kb.get("good_example", ""),
     )
 
 
@@ -187,27 +190,89 @@ def _check_storage_obj(d: dict, findings: list[Finding]) -> None:
         ))
 
 
+def _sql_finding(key: str, severity: Severity, findings: list[Finding],
+                 name: str, flat: str, extra_desc: str = "") -> None:
+    """sql_controls 카탈로그의 메타(title/criteria/fix/bad/good)로 Finding 생성."""
+    meta = sql_check(key) or {}
+    desc = meta.get("criteria", "")
+    if extra_desc:
+        desc = f"{desc} ({extra_desc})" if desc else extra_desc
+    findings.append(Finding(
+        control_code=meta.get("control_code", "2.7.1"),
+        control_domain=control_for(meta.get("control_code", "2.7.1"), "azure").get("domain", ""),
+        issue_type=key,
+        severity=severity,
+        title=f"{meta.get('title', key)}: {name or '(이름없음)'}",
+        description=desc,
+        recommendation=meta.get("fix", ""),
+        evidence=(flat or "")[:300],
+        resource=name,
+        platform="azure",
+        bad_example=meta.get("bad_example", ""),
+        good_example=meta.get("good_example", ""),
+    ))
+
+
+def _truthy_false(v) -> bool:
+    return v is False or str(v).lower() in ("false", "disabled", "off", "0")
+
+
 def _check_sql_obj(d: dict, findings: list[Finding]) -> None:
-    name = str(_val(d, "name", default="") or "")
+    """Azure SQL 관련 dict에서 8개 보안 항목을 판정.
+
+    입력은 az sql ... -o json 출력의 개별 객체(서버/DB/정책 등). 여러 명령 출력을
+    이어붙인 입력에서도 각 객체가 자신의 키를 가지면 해당 항목만 판정된다.
+    """
+    name = str(_val(d, "name", default="") or _val(d, "serverName", "databaseName", default="") or "")
     flat = json.dumps(d, ensure_ascii=False)
+    low = flat.lower()
+
+    # 1) TDE 비활성화
     tde = _val(d, "state", "status")
-    tde_ctx = "tde" in flat.lower() or "transparentdataencryption" in flat.lower()
-    if tde_ctx and str(tde).lower() in ("disabled", "false", "off"):
-        findings.append(_finding(
-            "2.7.1", "sql_tde_disabled", Severity.HIGH,
-            f"SQL TDE 비활성화: {name or '(이름없음)'}",
-            "SQL Database의 투명한 데이터 암호화(TDE)가 비활성화되어 저장 데이터가 암호화되지 않습니다.",
-            platform="azure", evidence=flat, resource=name,
-        ))
+    if ("tde" in low or "transparentdataencryption" in low) and _truthy_false(tde):
+        _sql_finding("sql_tde_disabled", Severity.HIGH, findings, name, flat)
+
+    # 2) CMK 미적용 (서비스 관리 키만)
+    skt = str(_val(d, "serverKeyType", default=""))
+    if skt.lower() == "servicemanaged":
+        _sql_finding("sql_cmk_not_used", Severity.MEDIUM, findings, name, flat)
+
+    # 3) 퍼블릭 네트워크 접근
     pub = str(_val(d, "publicNetworkAccess", default=""))
     if pub.lower() in ("enabled", "true"):
-        findings.append(_finding(
-            "2.6.1", "sql_public_access", Severity.HIGH,
-            f"SQL 퍼블릭 네트워크 접근 허용: {name or '(이름없음)'}",
-            "SQL 서버/DB가 퍼블릭 네트워크 접근을 허용합니다(publicNetworkAccess=Enabled).",
-            platform="azure", evidence=flat, resource=name,
-            recommendation="publicNetworkAccess를 Disabled로 두고 Private Endpoint·서비스 엔드포인트로만 접근하도록 제한하세요.",
-        ))
+        _sql_finding("sql_public_access", Severity.HIGH, findings, name, flat)
+    # 방화벽 규칙 0.0.0.0 전체 허용
+    start_ip = str(_val(d, "startIpAddress", default=""))
+    end_ip = str(_val(d, "endIpAddress", default=""))
+    if start_ip == "0.0.0.0" and end_ip in ("0.0.0.0", "255.255.255.255"):
+        _sql_finding("sql_public_access", Severity.HIGH, findings, name, flat,
+                     extra_desc="방화벽 규칙이 0.0.0.0로 전체 허용")
+
+    # 4) Private Endpoint 미구성 (서버 객체에 빈 연결 목록)
+    pec = _val(d, "privateEndpointConnections")
+    if isinstance(pec, list) and len(pec) == 0 and ("sql" in low or _val(d, "publicNetworkAccess") is not None):
+        _sql_finding("sql_no_private_endpoint", Severity.MEDIUM, findings, name, flat)
+
+    # 5) Auditing 비활성화 (audit 컨텍스트 + state Disabled)
+    if ("audit" in low) and _truthy_false(_val(d, "state")):
+        _sql_finding("sql_auditing_disabled", Severity.HIGH, findings, name, flat)
+
+    # 6) Defender for SQL 비활성화 (ATP/threat protection 컨텍스트)
+    if ("threatprotection" in low or "advancedthreatprotection" in low or "atp" in low) \
+            and _truthy_false(_val(d, "state")):
+        _sql_finding("sql_defender_disabled", Severity.HIGH, findings, name, flat)
+
+    # 7) 취약성 평가(VA) 미구성 (recurringScans.isEnabled = false)
+    rs = _val(d, "recurringScans")
+    if isinstance(rs, dict) and _truthy_false(_val(rs, "isEnabled")):
+        _sql_finding("sql_va_disabled", Severity.MEDIUM, findings, name, flat)
+
+    # 8) LTR 미구성 (weekly/monthly/yearly 모두 PT0S/빈값)
+    wk = str(_val(d, "weeklyRetention", default=""))
+    mo = str(_val(d, "monthlyRetention", default=""))
+    yr = str(_val(d, "yearlyRetention", default=""))
+    if (wk or mo or yr) and all(v in ("", "PT0S", "P0D") for v in (wk, mo, yr)):
+        _sql_finding("sql_ltr_not_configured", Severity.MEDIUM, findings, name, flat)
 
 
 def _check_keyvault_obj(d: dict, findings: list[Finding], seen: set) -> None:
@@ -468,8 +533,17 @@ def _check_azure_object(d: dict, findings: list[Finding], seen: set) -> None:
             or _val(d, "allowBlobPublicAccess") is not None:
         _check_storage_obj(d, findings)
 
-    if _looks_like(d, "sql/servers", "microsoft.sql") or _val(d, "publicNetworkAccess") is not None \
-            or "tde" in json.dumps(d).lower():
+    _sql_flat = json.dumps(d, ensure_ascii=False).lower()
+    if _looks_like(d, "sql/servers", "microsoft.sql") \
+            or _val(d, "publicNetworkAccess") is not None \
+            or _val(d, "serverKeyType") is not None \
+            or _val(d, "recurringScans") is not None \
+            or _val(d, "weeklyRetention", "monthlyRetention", "yearlyRetention") is not None \
+            or _val(d, "privateEndpointConnections") is not None \
+            or _val(d, "startIpAddress") is not None \
+            or any(k in _sql_flat for k in ("tde", "transparentdataencryption", "audit",
+                                            "threatprotection", "advancedthreatprotection",
+                                            "vulnerabilityassessment", "ltr")):
         _check_sql_obj(d, findings)
 
     is_vault_resource = _looks_like(d, "keyvault", "vaults") or (
@@ -552,6 +626,24 @@ def _check_raw_text(text: str, findings: list[Finding], existing_types: set, hin
         add("2.10.8", "patch_pending", Severity.MEDIUM,
             "미적용 보안 패치 가능성",
             "패치 평가 결과 Critical·Security 패치가 미적용 상태일 수 있습니다.")
+    # CVE 취약점 탐지 (대소문자 무시, 표준 CVE-YYYY-NNNN 형식)
+    cves = re.findall(r"CVE-\d{4}-\d{4,7}", text, re.I)
+    if cves and "cve_detected" not in existing_types:
+        unique = sorted({c.upper() for c in cves})
+        sev = Severity.CRITICAL if len(unique) >= 5 else (Severity.HIGH if len(unique) >= 2 else Severity.MEDIUM)
+        cve_sample = ", ".join(unique[:10])
+        if len(unique) > 10:
+            cve_sample += f" 외 {len(unique) - 10}건"
+        existing_types.add("cve_detected")
+        findings.append(_finding(
+            "2.11.2", "cve_detected", sev,
+            f"CVE 취약점 {len(unique)}건 발견",
+            f"입력에서 CVE 식별자가 {len(unique)}건 탐지되었습니다: {cve_sample}. "
+            "해당 취약점의 패치 적용 여부와 영향 범위를 확인하세요.",
+            recommendation="각 CVE의 CVSS 점수·영향 범위를 확인하고, 패치 가능한 것은 즉시 적용하세요. "
+                           "패치 불가 시 WAF 규칙·네트워크 격리 등 완화 조치를 검토하세요.",
+            platform=plat, evidence=cve_sample, resource=f"{len(unique)}건",
+        ))
 
 
 # ===========================================================================

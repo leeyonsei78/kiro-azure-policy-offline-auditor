@@ -53,6 +53,8 @@ class Finding:
         recommendation: 개선 방안(ISMS-P 개선방안 기반).
         resource: 관련 리소스 식별자(있으면).
         platform: 대상 클라우드 플랫폼("aws" | "azure").
+        bad_example: 위반(취약) 설정 예시.
+        good_example: 개선(안전) 설정 예시.
     """
 
     control_code: str
@@ -65,6 +67,8 @@ class Finding:
     evidence: str = ""
     resource: str = ""
     platform: str = "azure"
+    bad_example: str = ""
+    good_example: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

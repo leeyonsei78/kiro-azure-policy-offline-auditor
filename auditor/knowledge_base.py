@@ -369,6 +369,8 @@ def control_for(code: str, platform: str = "azure") -> dict:
         "cmd": plat.get("cmd", ""),
         "criteria": plat.get("criteria", ""),
         "fix": plat.get("fix", ""),
+        "bad_example": plat.get("bad_example", ""),
+        "good_example": plat.get("good_example", ""),
     }
 
 
@@ -399,5 +401,25 @@ def collection_commands(platform: str = "azure") -> list[dict]:
             "cmd": cmd,
             "cmd_lines": lines,
             "criteria": plat.get("criteria", ""),
+            "bad_example": plat.get("bad_example", ""),
+            "good_example": plat.get("good_example", ""),
         })
+
+    # Azure는 SQL 보안 세부 8항목(TDE/CMK/Public/PrivateEndpoint/Auditing/Defender/VA/LTR)도 함께 노출
+    if platform == "azure":
+        from .sql_controls import sql_checks
+        for s in sql_checks():
+            cmd = s.get("cmd", "") or ""
+            lines = [ln.strip() for ln in cmd.splitlines() if ln.strip()]
+            out.append({
+                "code": s.get("control_code", ""),
+                "domain": "SQL 보안 세부점검",
+                "desc": s.get("title", ""),
+                "platform": platform,
+                "cmd": cmd,
+                "cmd_lines": lines,
+                "criteria": s.get("criteria", ""),
+                "bad_example": s.get("bad_example", ""),
+                "good_example": s.get("good_example", ""),
+            })
     return out

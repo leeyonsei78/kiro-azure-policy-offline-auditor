@@ -9,6 +9,9 @@
 - 🔒 **완전 오프라인**: Python 표준 라이브러리만 사용. 외부 패키지·인터넷·AI API·CDN이 전혀 필요 없습니다.
 - ☁️ **AWS + Azure 지원**: 입력을 자동 감지해 플랫폼별(AWS/Azure) 판단기준·개선안·재점검 CLI를 적용하고, 결과에 플랫폼 뱃지·필터를 제공합니다.
 - 📋 **ISMS-P 기준**: 클라우드 인프라 직결 7개 영역·**17개 통제항목**의 판단기준/개선방안을 플랫폼별로 내장.
+- 🗄️ **Azure SQL 심층 점검(8항목)**: TDE·CMK·Public Access·Private Endpoint·Auditing·Defender for SQL·취약성 평가(VA)·장기보존(LTR)을 명령어와 함께 점검.
+- 🐞 **CVE 탐지**: 입력 텍스트의 `CVE-YYYY-NNNN` 식별자를 자동 인식해 취약점(2.11.2)으로 보고(건수에 따라 심각도 상향).
+- 🔴🟢 **위반 예시 / 개선 예시**: 각 이슈에 "이렇게 되면 위반 / 이렇게 고치면 정상" 설정 예시를 함께 제시.
 - 🧩 **관대한 입력**: `aws ... `/`az ... ` 의 `-o json` 출력이 가장 정확하지만, 여러 명령 출력을 한 파일에 이어붙이거나 표/텍스트가 섞여도 최대한 분석합니다.
 - 🖥️ **웹 UI + CLI**: 브라우저에서 붙여넣기/업로드하거나, 명령줄에서 파일/파이프로 검토.
 - 🔎 **결과**: 점수·등급, 플랫폼(AWS/Azure)·이슈별 심각도, 매핑된 ISMS-P 통제항목, **구체적 개선 제안**, 재점검용 CLI. CSV/PDF(인쇄)로 저장 가능.
@@ -151,7 +154,7 @@ aws cloudtrail describe-trails --output json                          >> aws.txt
 ```
 
 여러 명령 출력을 한 파일에 이어붙여도 되고, AWS/Azure를 섞어 넣어도 각각 구별해 분석합니다.
-`samples/` 폴더의 예시 파일(Azure: `nsg-rules.json` 등, AWS: `aws-security-groups.json`, `aws-s3-iam.json`)을 참고하세요.
+`samples/` 폴더의 예시 파일(Azure: `nsg-rules.json`, `azure-sql.json` 등, AWS: `aws-security-groups.json`, `aws-s3-iam.json`)을 참고하세요.
 
 ## 점검하는 ISMS-P 통제항목 (17개)
 
@@ -165,6 +168,21 @@ aws cloudtrail describe-trails --output json                          >> aws.txt
 | 사고대응 | 2.11.2 / 2.11.3 | 취약점 평가(Unhealthy), Defender 경고·이상탐지 |
 | 재해복구 | 2.12.1 | 백업 상태(Failed)·이중화(GRS/LRS) |
 
+## Azure SQL 심층 점검 (8항목)
+
+수집 명령어 가이드 탭(Azure) 및 검토 결과에서 함께 다루며, 각 항목에 **점검 명령 + 위반 예시 + 개선 예시**를 제공합니다.
+
+| 항목 | ISMS-P | 점검 내용 |
+|------|:------:|-----------|
+| TDE(투명한 데이터 암호화) | 2.7.1 | `state`가 Disabled면 저장 데이터 미암호화 |
+| CMK(고객관리키) | 2.7.2 | `serverKeyType`이 ServiceManaged면 플랫폼 기본 키만 사용 |
+| Public Access | 2.6.1 | `publicNetworkAccess=Enabled` 또는 방화벽 0.0.0.0 전체 허용 |
+| Private Endpoint | 2.6.1 | Private Endpoint 연결 없음(퍼블릭 경로만) |
+| Auditing(감사) | 2.9.4 | 감사 `state`가 Disabled·보존일 미달 |
+| Defender for SQL | 2.11.3 | 고급 위협 방지 Disabled(이상행위·SQLi 미탐지) |
+| 취약성 평가(VA) | 2.11.2 | `recurringScans.isEnabled=false`(정기 스캔 미구성) |
+| 장기보존(LTR) | 2.12.1 | 주/월/년 보존값이 모두 PT0S(장기 백업 미보존) |
+
 자동 검출은 입력에 포함된 리소스에 한합니다. 텍스트만 있는 항목(진단·백업·패치 등)은 키워드로 보완 탐지합니다.
 
 ## 프로젝트 구조
@@ -174,7 +192,8 @@ azure-policy-offline-auditor/
   auditor/
     __init__.py
     __main__.py          # python -m auditor 진입점
-    knowledge_base.py    # ISMS-P Azure 17개 통제항목(판단기준·개선방안) 내장
+    knowledge_base.py    # ISMS-P 17개 통제항목(AWS/Azure 판단기준·개선방안) 내장
+    sql_controls.py      # Azure SQL 심층 점검 8항목(명령어·위반/개선 예시)
     models.py            # Finding / AuditReport / Severity
     parser.py            # 입력 txt 파싱(JSON 블록 추출 + 텍스트 폴백)
     engine.py            # 오프라인 판정 엔진(정규식·구조 분석)
