@@ -10,6 +10,8 @@
   python -m auditor --controls              # ISMS-P 통제항목 목록 출력
   python -m auditor --commands              # 정보 수집 CLI 명령어(기본 AWS+Azure)
   python -m auditor --commands --platform aws   # AWS 수집 명령어만
+  python -m auditor --script --platform azure --out collect-azure.sh       # 일괄 수집 스크립트(bash)
+  python -m auditor --script --platform azure --shell ps1 --out collect.ps1  # PowerShell 스크립트
   python -m auditor --web [--port 8080]     # 웹 UI 실행(auditor.webui로 위임)
 
 종료 코드:
@@ -23,6 +25,7 @@ import json
 import sys
 
 from .engine import analyze
+from .collector_script import build_script, script_filename
 from .knowledge_base import all_controls, collection_commands
 from .report import format_csv, format_html, format_text, format_xlsx
 
@@ -87,7 +90,11 @@ def main(argv=None) -> int:
     parser.add_argument("--commands", action="store_true",
                         help="정보 수집 CLI 명령어 가이드 출력 후 종료")
     parser.add_argument("--platform", choices=["aws", "azure"],
-                        help="--commands 대상 플랫폼(미지정 시 AWS+Azure 모두)")
+                        help="--commands/--script 대상 플랫폼(--commands 미지정 시 AWS+Azure 모두, --script 미지정 시 azure)")
+    parser.add_argument("--script", action="store_true",
+                        help="장비/서비스별 일괄 수집 스크립트 생성 후 출력/저장")
+    parser.add_argument("--shell", choices=["bash", "ps1"], default="bash",
+                        help="--script 셸 종류(bash 기본, PowerShell은 ps1)")
     parser.add_argument("--web", action="store_true", help="웹 UI 실행")
     parser.add_argument("--host", default="127.0.0.1", help="웹 UI 호스트(--web)")
     parser.add_argument("--port", type=int, default=8080, help="웹 UI 포트(--web)")
@@ -103,6 +110,22 @@ def main(argv=None) -> int:
 
     if args.commands:
         _print_commands(args.platform, args.json)
+        return 0
+
+    if args.script:
+        platform = args.platform or "azure"
+        content = build_script(platform, args.shell)
+        if args.out:
+            try:
+                with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(content)
+            except OSError as e:
+                print(f"파일 저장 실패: {e}", file=sys.stderr)
+                return 2
+            print(f"저장 완료: {args.out}  (권장 파일명: {script_filename(platform, args.shell)})",
+                  file=sys.stderr)
+        else:
+            print(content)
         return 0
 
     try:

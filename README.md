@@ -100,6 +100,28 @@ python -m auditor --web                      # http://127.0.0.1:8080
 
 관리망에서 이 명령들로 정책·구성을 내보내(`-o json`) txt로 저장한 뒤, '보안검토' 탭에 업로드하는 흐름입니다.
 
+### 📥 일괄 수집 스크립트 (장비/서비스별 자동 수집)
+
+명령을 하나씩 실행하기 번거로우면, **모든 점검 명령을 한 번에 실행하는 스크립트**를 내려받을 수 있습니다.
+
+- 수집 명령어 가이드 탭의 **"Bash(.sh) / PowerShell(.ps1) 다운로드"** 버튼, 또는 CLI `--script`
+- 스크립트는 **장비/서비스별 섹션**(네트워크, IAM, Storage, Key Vault, SQL Database, Defender, 백업 등)으로 구분되어 있고, 각 섹션 상단에 장비 설명이 들어 있습니다.
+- 각 명령의 결과가 `out/` 폴더에 **서비스별 JSON**으로 저장됩니다.
+
+**사용 절차 (스크립트 맨 위 주석에도 동일하게 안내됨):**
+
+1. **관리망 PC**에서 클라우드 CLI 로그인
+   - Azure: `az login`  /  AWS: `aws configure` (또는 `aws sso login`) — **읽기 권한** 계정 권장
+2. 스크립트의 자리표시자(`<RG>`, `<SERVER>`, `<DB>`, `<NSG>`, `<BUCKET>` 등)를 **실제 값으로 치환**
+3. 실행
+   - Bash: `chmod +x collect-azure.sh && ./collect-azure.sh`
+   - PowerShell: `Set-ExecutionPolicy -Scope Process Bypass -Force; .\collect-azure.ps1`
+4. 결과 `out/` 폴더를 압축
+   - Bash: `zip -r out.zip out`  /  PowerShell: `Compress-Archive -Path .\out\* -DestinationPath out.zip -Force`
+5. `out/` 폴더의 **JSON 내용을 '보안검토' 탭에 업로드**(여러 파일을 이어붙여 붙여넣거나 파일 불러오기)
+
+> 자리표시자를 못 채운 명령은 스크립트가 자동으로 건너뛰고(`.err` 파일로 기록) 나머지는 계속 수집합니다.
+
 ## 사용법 2 — 명령줄(CLI)
 
 ```bash
@@ -130,6 +152,11 @@ python -m auditor --commands
 # 특정 플랫폼만
 python -m auditor --commands --platform aws
 python -m auditor --commands --platform azure
+
+# 일괄 수집 스크립트 생성(장비/서비스별)
+python -m auditor --script --platform azure --out collect-azure.sh
+python -m auditor --script --platform azure --shell ps1 --out collect-azure.ps1
+python -m auditor --script --platform aws --out collect-aws.sh
 ```
 
 > `--out`(또는 `-o`) 없이 `--csv`/`--html` 만 쓰면 화면에 출력됩니다.
@@ -201,6 +228,7 @@ azure-policy-offline-auditor/
     __main__.py          # python -m auditor 진입점
     knowledge_base.py    # ISMS-P 17개 통제항목(AWS/Azure 판단기준·개선방안) 내장
     sql_controls.py      # Azure SQL 심층 점검 8항목(명령어·위반/개선 예시)
+    collector_script.py  # 장비/서비스별 일괄 수집 스크립트 생성(.sh/.ps1)
     models.py            # Finding / AuditReport / Severity
     parser.py            # 입력 txt 파싱(JSON 블록 추출 + 텍스트 폴백)
     engine.py            # 오프라인 판정 엔진(정규식·구조 분석)

@@ -380,12 +380,51 @@ def controls_for_resource(resource_tag: str) -> list[dict]:
 
 
 
+# 리소스 태그 → 장비/서비스 그룹명(수집 스크립트 섹션 구분용)
+_SERVICE_MAP_AZURE = {
+    "nsg": "네트워크(NSG/방화벽)", "firewall": "네트워크(NSG/방화벽)",
+    "bastion": "네트워크(NSG/방화벽)", "publicip": "네트워크(NSG/방화벽)",
+    "rbac": "IAM/Entra ID", "entra": "IAM/Entra ID", "mfa": "IAM/Entra ID",
+    "password": "IAM/Entra ID", "serviceprincipal": "IAM/Entra ID",
+    "storage": "Storage", "tls": "Storage",
+    "keyvault": "Key Vault", "sql": "SQL Database",
+    "diagnostic": "모니터링/로그", "activitylog": "모니터링/로그", "loganalytics": "모니터링/로그",
+    "policy": "거버넌스(Policy/관리그룹)", "managementgroup": "거버넌스(Policy/관리그룹)",
+    "patch": "패치/업데이트", "updatemgmt": "패치/업데이트",
+    "defender": "Defender for Cloud", "assessment": "Defender for Cloud", "alert": "Defender for Cloud",
+    "backup": "백업/재해복구",
+}
+_SERVICE_MAP_AWS = {
+    "nsg": "네트워크(보안그룹)", "firewall": "네트워크(보안그룹)",
+    "bastion": "네트워크(보안그룹)", "publicip": "네트워크(보안그룹)",
+    "rbac": "IAM", "entra": "IAM", "mfa": "IAM",
+    "password": "IAM", "serviceprincipal": "IAM",
+    "storage": "S3/스토리지", "tls": "S3/스토리지",
+    "keyvault": "KMS", "sql": "RDS",
+    "diagnostic": "CloudTrail/로그", "activitylog": "CloudTrail/로그", "loganalytics": "CloudTrail/로그",
+    "policy": "거버넌스(Organizations/Config)", "managementgroup": "거버넌스(Organizations/Config)",
+    "patch": "패치(SSM)", "updatemgmt": "패치(SSM)",
+    "defender": "GuardDuty/Inspector", "assessment": "GuardDuty/Inspector", "alert": "GuardDuty/Inspector",
+    "backup": "백업/재해복구",
+}
+
+
+def _service_for(resources: list[str], platform: str) -> str:
+    """리소스 태그 목록 → 대표 장비/서비스 그룹명."""
+    mapping = _SERVICE_MAP_AWS if platform == "aws" else _SERVICE_MAP_AZURE
+    for tag in resources or []:
+        if tag in mapping:
+            return mapping[tag]
+    return "기타"
+
+
 def collection_commands(platform: str = "azure") -> list[dict]:
     """플랫폼(azure/aws)별 '정보 수집(점검) 명령어'를 통제항목 순으로 정리.
 
-    각 항목: {code, domain, desc, platform, cmd, cmd_lines, criteria}
+    각 항목: {code, domain, desc, platform, cmd, cmd_lines, criteria, service, ...}
     - cmd: 원본 멀티라인 명령 문자열
     - cmd_lines: 줄 단위로 분리한 명령 목록(화면에서 명령별 복사용, 빈 줄 제외)
+    - service: 장비/서비스 그룹명(수집 스크립트 섹션 구분용)
     통제항목 코드 순으로 정렬해 반환한다.
     """
     out: list[dict] = []
@@ -403,6 +442,7 @@ def collection_commands(platform: str = "azure") -> list[dict]:
             "criteria": plat.get("criteria", ""),
             "bad_example": plat.get("bad_example", ""),
             "good_example": plat.get("good_example", ""),
+            "service": _service_for(c.get("resources", []), platform),
         })
 
     # Azure는 SQL 보안 세부 8항목(TDE/CMK/Public/PrivateEndpoint/Auditing/Defender/VA/LTR)도 함께 노출
@@ -421,5 +461,6 @@ def collection_commands(platform: str = "azure") -> list[dict]:
                 "criteria": s.get("criteria", ""),
                 "bad_example": s.get("bad_example", ""),
                 "good_example": s.get("good_example", ""),
+                "service": "SQL Database",
             })
     return out

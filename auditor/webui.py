@@ -21,6 +21,7 @@ import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .engine import analyze
+from .collector_script import build_script, script_filename
 from .knowledge_base import all_controls, collection_commands
 from .report import format_csv, format_html, format_xlsx
 
@@ -158,6 +159,12 @@ INDEX_HTML = """<!DOCTYPE html>
       <span class="hint" id="cmd-count"></span>
     </div>
     <input class="search" id="cmd-search" placeholder="검색: 통제항목 코드·영역·명령어(예: 2.6.1, 보안그룹, s3, nsg)" oninput="renderCommands()">
+    <div class="row" style="margin-top:10px">
+      <span class="hint">📥 일괄 수집 스크립트:</span>
+      <button class="btn primary" onclick="downloadScript('bash')">Bash(.sh) 다운로드</button>
+      <button class="btn" onclick="downloadScript('ps1')">PowerShell(.ps1) 다운로드</button>
+    </div>
+    <div class="hint" style="margin-top:6px">스크립트를 관리망 PC에서 실행하면 장비/서비스별로 결과가 <code>out/</code> 폴더에 JSON으로 저장됩니다. 실행 방법은 스크립트 맨 위 주석을 참고하세요. 그 폴더(zip 또는 JSON 내용)를 '보안검토' 탭에 업로드하면 됩니다.</div>
     <div class="err" id="cmd-err"></div>
   </div>
   <div id="cmd-list"></div>
@@ -185,6 +192,16 @@ function setCmdPlatform(p){
     b.classList.toggle('on', b.getAttribute('data-p')===p);
   });
   loadCommands();
+}
+function downloadScript(shell){
+  var url='/api/script?platform='+encodeURIComponent(CMD_PLATFORM)+'&shell='+encodeURIComponent(shell);
+  fetch(url).then(function(r){ return r.blob(); }).then(function(blob){
+    var u=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=u; a.download='collect-'+CMD_PLATFORM+'.'+(shell==='ps1'?'ps1':'sh');
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(u); }, 1000);
+  }).catch(function(e){ document.getElementById('cmd-err').textContent='스크립트 다운로드 실패: '+e; });
 }
 async function loadCommands(){
   document.getElementById('cmd-err').textContent='';
@@ -416,6 +433,23 @@ class Handler(BaseHTTPRequestHandler):
             if platform not in ("aws", "azure"):
                 platform = "aws"
             self._send_json({"platform": platform, "commands": collection_commands(platform)})
+        elif self.path.startswith("/api/script"):
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(self.path).query)
+            platform = (qs.get("platform", ["azure"])[0] or "azure").lower()
+            if platform not in ("aws", "azure"):
+                platform = "azure"
+            shell = (qs.get("shell", ["bash"])[0] or "bash").lower()
+            if shell not in ("bash", "ps1"):
+                shell = "bash"
+            body = build_script(platform, shell).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="{script_filename(platform, shell)}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         else:
             self._send_json({"ok": False, "error": "not found"}, status=404)
 
