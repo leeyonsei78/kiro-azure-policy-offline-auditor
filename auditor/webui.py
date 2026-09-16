@@ -185,6 +185,9 @@ function switchTab(t){
   if(t==='commands' && !CMD_DATA){ loadCommands(); }
 }
 
+// 업로드한 파일명(있으면 저장 파일명에 포함). 붙여넣기만 한 경우엔 빈 문자열.
+var LOADED_FILENAME='';
+
 // ----- 수집 명령어 가이드 -----
 var CMD_PLATFORM='aws';
 var CMD_DATA=null;
@@ -256,7 +259,7 @@ function fallbackCopy(text){
   try{ document.execCommand('copy'); }catch(e){}
   document.body.removeChild(ta);
 }
-function clearAll(){ document.getElementById('input').value=''; document.getElementById('result-card').style.display='none'; document.getElementById('err').textContent=''; }
+function clearAll(){ document.getElementById('input').value=''; document.getElementById('result-card').style.display='none'; document.getElementById('err').textContent=''; LOADED_FILENAME=''; var m=document.getElementById('load-info'); if(m) m.textContent=''; }
 function loadFile(){
   var f=document.getElementById('file').files[0];
   var meta=document.getElementById('load-info');
@@ -272,6 +275,7 @@ function loadFile(){
     if(text.indexOf('\uFFFD')<0){
       // 깨짐 없음 → 최초 버전 그대로. 성공.
       document.getElementById('input').value=text;
+      LOADED_FILENAME=f.name;
       if(meta) meta.textContent='불러옴: '+f.name+' ('+f.size+' bytes)';
       return;
     }
@@ -303,6 +307,7 @@ function serverDecode(f, meta, errEl){
         catch(pe){ errEl.textContent='서버 응답을 해석하지 못했습니다.'; if(meta) meta.textContent=''; return; }
         if(!data.ok){ errEl.textContent=data.error||'파일 디코딩 실패'; if(meta) meta.textContent=''; return; }
         document.getElementById('input').value=data.text;
+        LOADED_FILENAME=f.name;
         errEl.textContent='';
         if(meta) meta.textContent='불러옴: '+f.name+' ('+f.size+' bytes, 인코딩: '+data.encoding+')';
       };
@@ -405,10 +410,23 @@ function renderFindings(r){
   host.innerHTML=html || '<div class="finding empty">선택한 플랫폼의 이슈가 없습니다.</div>';
 }
 
+function _baseFromLoaded(){
+  // 업로드한 파일명이 있으면 확장자를 뗀 기본이름을 돌려준다(없으면 빈 문자열).
+  if(!LOADED_FILENAME) return '';
+  var name=LOADED_FILENAME;
+  var dot=name.lastIndexOf('.');
+  if(dot>0) name=name.substring(0,dot);           // 확장자 제거
+  name=name.replace(/[\\\/:*?"<>|]+/g,'_').trim(); // 파일명 금지문자 정리
+  return name;
+}
 function _tsName(ext){
   var d=new Date();
   function p(n){ return (n<10?'0':'')+n; }
-  return 'azure-audit_'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes())+'.'+ext;
+  var stamp=d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes());
+  var base=_baseFromLoaded();
+  // 업로드 파일명이 있으면 "audit_<파일명>_<날짜시간>.ext", 없으면 기존과 동일.
+  if(base) return 'audit_'+base+'_'+stamp+'.'+ext;
+  return 'azure-audit_'+stamp+'.'+ext;
 }
 async function downloadCsv(){
   var text=document.getElementById('input').value;
@@ -445,6 +463,8 @@ async function openPdf(){
     var w=window.open('', '_blank');
     if(!w){ document.getElementById('err').textContent='팝업이 차단되었습니다. 팝업을 허용한 뒤 다시 시도하세요.'; return; }
     w.document.open(); w.document.write(html); w.document.close();
+    // 브라우저의 "PDF로 저장" 기본 파일명은 창 제목을 따르므로, 업로드 파일명 기반 이름으로 설정.
+    try{ w.document.title=_tsName('pdf').replace(/\.pdf$/,''); }catch(e){}
   }catch(e){ document.getElementById('err').textContent='PDF(인쇄) 준비 실패: '+e; }
 }
 </script>
