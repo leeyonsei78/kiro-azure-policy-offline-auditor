@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .engine import analyze
 from .collector_script import build_script, script_filename
 from .knowledge_base import all_controls, collection_commands
+from .parser import decode_bytes
 from .report import format_csv, format_html, format_xlsx
 
 logger = logging.getLogger(__name__)
@@ -259,49 +260,32 @@ function clearAll(){ document.getElementById('input').value=''; document.getElem
 function loadFile(){
   var f=document.getElementById('file').files[0];
   if(!f){ document.getElementById('err').textContent='파일을 먼저 선택하세요.'; return; }
+  var meta=document.getElementById('load-info');
+  if(meta) meta.textContent='불러오는 중... ('+f.name+')';
+  document.getElementById('err').textContent='';
   var r=new FileReader();
-  r.onload=function(e){
-    // 파일 인코딩이 UTF-8이 아닐 수 있음(Windows 메모장/PowerShell은 cp949·UTF-16 저장이 흔함).
-    // 바이트로 읽어 BOM 확인 + UTF-8 우선, 실패 시 EUC-KR(cp949)로 폴백 디코딩한다.
+  r.onload=async function(e){
+    // 인코딩 판별은 서버(파이썬)에 맡긴다. 브라우저 TextDecoder는
+    // BOM 없는 UTF-16을 감지 못하고 euc-kr 미지원 브라우저도 있어서다.
+    // 파일 원시 바이트를 그대로 /api/decode 로 보내 디코딩된 텍스트를 받는다.
     try{
-      var bytes=new Uint8Array(e.target.result);
-      var res=decodeSmart(bytes);
-      document.getElementById('input').value=res.text;
+      var resp=await fetch('/api/decode',{
+        method:'POST',
+        headers:{'Content-Type':'application/octet-stream'},
+        body:e.target.result   // ArrayBuffer(원시 바이트)
+      });
+      var data=await resp.json();
+      if(!data.ok){ document.getElementById('err').textContent=data.error||'파일 디코딩 실패'; if(meta) meta.textContent=''; return; }
+      document.getElementById('input').value=data.text;
       document.getElementById('err').textContent='';
-      var meta=document.getElementById('load-info');
-      if(meta) meta.textContent='불러옴: '+f.name+' ('+bytes.length+' bytes, 인코딩: '+res.enc+')';
+      if(meta) meta.textContent='불러옴: '+f.name+' ('+f.size+' bytes, 인코딩: '+data.encoding+')';
     }catch(err){
       document.getElementById('err').textContent='파일을 읽는 중 오류: '+err;
+      if(meta) meta.textContent='';
     }
   };
-  r.onerror=function(){ document.getElementById('err').textContent='파일 읽기에 실패했습니다.'; };
+  r.onerror=function(){ document.getElementById('err').textContent='파일 읽기에 실패했습니다.'; if(meta) meta.textContent=''; };
   r.readAsArrayBuffer(f);
-}
-function _tryDecode(bytes, enc, fatal){
-  try{
-    var opt = fatal ? {fatal:true} : undefined;
-    return new TextDecoder(enc, opt).decode(bytes);
-  }catch(e){ return null; }
-}
-function decodeSmart(bytes){
-  // 1) BOM 감지
-  if(bytes.length>=3 && bytes[0]===0xEF && bytes[1]===0xBB && bytes[2]===0xBF){
-    return {text:(_tryDecode(bytes.subarray(3),'utf-8',false)||''), enc:'UTF-8(BOM)'};
-  }
-  if(bytes.length>=2 && bytes[0]===0xFF && bytes[1]===0xFE){
-    return {text:(_tryDecode(bytes.subarray(2),'utf-16le',false)||''), enc:'UTF-16LE'};
-  }
-  if(bytes.length>=2 && bytes[0]===0xFE && bytes[1]===0xFF){
-    return {text:(_tryDecode(bytes.subarray(2),'utf-16be',false)||''), enc:'UTF-16BE'};
-  }
-  // 2) BOM 없음: UTF-8 유효성 검사(fatal)
-  var u=_tryDecode(bytes,'utf-8',true);
-  if(u!==null) return {text:u, enc:'UTF-8'};
-  // 3) UTF-8 아님 → cp949/euc-kr 시도(브라우저가 지원하면)
-  var k=_tryDecode(bytes,'euc-kr',false);
-  if(k!==null) return {text:k, enc:'EUC-KR/CP949'};
-  // 4) 최후: 손실 허용 UTF-8(깨진 바이트는 대체문자)
-  return {text:(_tryDecode(bytes,'utf-8',false)||''), enc:'UTF-8(대체)'};
 }
 async function runAudit(){
   document.getElementById('err').textContent='';
@@ -465,6 +449,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             self._send_html(INDEX_HTML)
+        elif self.path == "/favicon.ico":
+            # 브라우저가 자동 요청하는 파비콘. 콘솔 404 방지용으로 빈 응답(204).
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         elif self.path == "/api/controls":
             self._send_json({"controls": all_controls()})
         elif self.path.startswith("/api/commands"):
@@ -523,13 +512,34 @@ class Handler(BaseHTTPRequestHandler):
             payload = {}
         return payload, None
 
+    def _read_raw_bytes(self):
+        """요청 본문을 원시 바이트로. (data, error) 반환."""
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length > _MAX_BODY:
+            return None, "파일이 너무 큽니다(최대 8MB)."
+        return (self.rfile.read(length) if length else b""), None
+
     def do_POST(self):
         if self.path == "/api/audit":
             self._handle_audit()
         elif self.path == "/api/export":
             self._handle_export()
+        elif self.path == "/api/decode":
+            self._handle_decode()
         else:
             self._send_json({"ok": False, "error": "not found"}, status=404)
+
+    def _handle_decode(self):
+        """파일 원시 바이트를 받아 인코딩을 판별·디코딩해 텍스트로 돌려준다."""
+        try:
+            data, err = self._read_raw_bytes()
+            if err:
+                self._send_json({"ok": False, "error": err}, status=413)
+                return
+            text, enc = decode_bytes(data)
+            self._send_json({"ok": True, "text": text, "encoding": enc})
+        except Exception as e:  # noqa: BLE001
+            self._send_json({"ok": False, "error": str(e)}, status=500)
 
     def _handle_audit(self):
         try:

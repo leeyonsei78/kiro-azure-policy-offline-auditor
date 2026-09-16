@@ -134,3 +134,87 @@ def iter_dicts(obj: Any):
     elif isinstance(obj, list):
         for item in obj:
             yield from iter_dicts(item)
+
+
+
+# --------------------------------------------------------------------------
+# 바이트 → 텍스트 디코딩 (파일 업로드/불러오기용)
+# --------------------------------------------------------------------------
+# 폐쇄망 환경에서는 파일이 여러 인코딩으로 저장된다:
+#   - UTF-8 (BOM 있음/없음)
+#   - UTF-16 LE / BE (BOM 있음/없음)  ← Windows PowerShell `>` 리다이렉트 기본값
+#   - cp949(euc-kr) : 한글 Windows 레거시
+# 브라우저 TextDecoder는 BOM 없는 UTF-16을 감지하지 못하고 euc-kr 미지원
+# 브라우저도 있어, 서버(파이썬)에서 판별·디코딩한다.
+
+
+def _looks_like_utf16(data: bytes) -> str | None:
+    """BOM 없는 UTF-16을 널바이트 패턴으로 추정. 'le'/'be'/None 반환."""
+    if len(data) < 4:
+        return None
+    # ASCII 위주 텍스트를 UTF-16으로 저장하면 널바이트가 대량 발생한다.
+    sample = data[:4096]
+    nulls = sample.count(0)
+    if nulls < len(sample) * 0.15:
+        return None  # 널바이트가 적으면 UTF-16 아님(UTF-8/cp949)
+
+    # 짝수/홀수 위치의 널바이트 분포로 LE/BE 구분.
+    even_nulls = sum(1 for i in range(0, len(sample), 2) if sample[i] == 0)
+    odd_nulls = sum(1 for i in range(1, len(sample), 2) if sample[i] == 0)
+    # LE: 상위바이트(홀수 위치)가 0 → "A" = 41 00
+    # BE: 하위바이트(짝수 위치)가 0 → "A" = 00 41
+    if odd_nulls > even_nulls:
+        return "le"
+    if even_nulls > odd_nulls:
+        return "be"
+    return "le"  # 애매하면 Windows 기본값(LE)
+
+
+def decode_bytes(data: bytes) -> tuple[str, str]:
+    """파일 바이트를 텍스트로 디코딩. (text, encoding_label) 반환.
+
+    감지 순서:
+      1) BOM 검사 (UTF-8-SIG, UTF-16 LE/BE)
+      2) BOM 없는 UTF-16 추정 (널바이트 패턴)
+      3) 엄격 UTF-8 시도
+      4) cp949(한글 Windows) 시도
+      5) 최후: UTF-8 + 대체문자(손실 허용)
+    """
+    if not data:
+        return "", "empty"
+
+    # 1) BOM
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data.decode("utf-8-sig"), "utf-8 (BOM)"
+    if data.startswith(b"\xff\xfe"):
+        return data.decode("utf-16"), "utf-16-le (BOM)"
+    if data.startswith(b"\xfe\xff"):
+        return data.decode("utf-16"), "utf-16-be (BOM)"
+
+    # 2) BOM 없는 UTF-16
+    guess = _looks_like_utf16(data)
+    if guess == "le":
+        try:
+            return data.decode("utf-16-le"), "utf-16-le"
+        except UnicodeDecodeError:
+            pass
+    elif guess == "be":
+        try:
+            return data.decode("utf-16-be"), "utf-16-be"
+        except UnicodeDecodeError:
+            pass
+
+    # 3) 엄격 UTF-8
+    try:
+        return data.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        pass
+
+    # 4) cp949 (한글 Windows 레거시)
+    try:
+        return data.decode("cp949"), "cp949 (euc-kr)"
+    except UnicodeDecodeError:
+        pass
+
+    # 5) 최후: 손실 허용
+    return data.decode("utf-8", errors="replace"), "utf-8 (일부 손실)"
