@@ -122,6 +122,7 @@ INDEX_HTML = """<!DOCTYPE html>
       <button class="btn" onclick="clearAll()">지우기</button>
       <span class="hint">파일 업로드도 로컬에서만 읽어 텍스트칸에 채웁니다(서버 전송 시에도 저장 안 함).</span>
     </div>
+    <div class="hint" id="load-info" style="margin-top:6px"></div>
     <div class="err" id="err"></div>
   </div>
 
@@ -262,32 +263,45 @@ function loadFile(){
   r.onload=function(e){
     // 파일 인코딩이 UTF-8이 아닐 수 있음(Windows 메모장/PowerShell은 cp949·UTF-16 저장이 흔함).
     // 바이트로 읽어 BOM 확인 + UTF-8 우선, 실패 시 EUC-KR(cp949)로 폴백 디코딩한다.
-    var buf=e.target.result;
-    var bytes=new Uint8Array(buf);
-    var text=decodeSmart(bytes);
-    document.getElementById('input').value=text;
-    document.getElementById('err').textContent='';
+    try{
+      var bytes=new Uint8Array(e.target.result);
+      var res=decodeSmart(bytes);
+      document.getElementById('input').value=res.text;
+      document.getElementById('err').textContent='';
+      var meta=document.getElementById('load-info');
+      if(meta) meta.textContent='불러옴: '+f.name+' ('+bytes.length+' bytes, 인코딩: '+res.enc+')';
+    }catch(err){
+      document.getElementById('err').textContent='파일을 읽는 중 오류: '+err;
+    }
   };
+  r.onerror=function(){ document.getElementById('err').textContent='파일 읽기에 실패했습니다.'; };
   r.readAsArrayBuffer(f);
 }
+function _tryDecode(bytes, enc, fatal){
+  try{
+    var opt = fatal ? {fatal:true} : undefined;
+    return new TextDecoder(enc, opt).decode(bytes);
+  }catch(e){ return null; }
+}
 function decodeSmart(bytes){
-  // BOM 감지
+  // 1) BOM 감지
   if(bytes.length>=3 && bytes[0]===0xEF && bytes[1]===0xBB && bytes[2]===0xBF){
-    return new TextDecoder('utf-8').decode(bytes.subarray(3));
+    return {text:(_tryDecode(bytes.subarray(3),'utf-8',false)||''), enc:'UTF-8(BOM)'};
   }
   if(bytes.length>=2 && bytes[0]===0xFF && bytes[1]===0xFE){
-    return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+    return {text:(_tryDecode(bytes.subarray(2),'utf-16le',false)||''), enc:'UTF-16LE'};
   }
   if(bytes.length>=2 && bytes[0]===0xFE && bytes[1]===0xFF){
-    return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+    return {text:(_tryDecode(bytes.subarray(2),'utf-16be',false)||''), enc:'UTF-16BE'};
   }
-  // BOM 없음: UTF-8을 fatal로 시도 → 실패하면 cp949(euc-kr)
-  try{
-    return new TextDecoder('utf-8', {fatal:true}).decode(bytes);
-  }catch(e){
-    try{ return new TextDecoder('euc-kr').decode(bytes); }
-    catch(e2){ return new TextDecoder('utf-8').decode(bytes); }
-  }
+  // 2) BOM 없음: UTF-8 유효성 검사(fatal)
+  var u=_tryDecode(bytes,'utf-8',true);
+  if(u!==null) return {text:u, enc:'UTF-8'};
+  // 3) UTF-8 아님 → cp949/euc-kr 시도(브라우저가 지원하면)
+  var k=_tryDecode(bytes,'euc-kr',false);
+  if(k!==null) return {text:k, enc:'EUC-KR/CP949'};
+  // 4) 최후: 손실 허용 UTF-8(깨진 바이트는 대체문자)
+  return {text:(_tryDecode(bytes,'utf-8',false)||''), enc:'UTF-8(대체)'};
 }
 async function runAudit(){
   document.getElementById('err').textContent='';
