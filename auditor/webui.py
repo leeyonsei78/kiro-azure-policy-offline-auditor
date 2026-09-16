@@ -102,7 +102,7 @@ INDEX_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>🛡️ 클라우드 정책 오프라인 보안검토 <span class="sub">(ISMS-P · AWS/Azure)</span></h1>
+  <h1>🛡️ 클라우드 정책 오프라인 보안검토 <span class="sub">(ISMS-P · AWS/Azure)</span> <span class="sub" style="font-size:12px;opacity:.7">v2 (파일읽기 개선)</span></h1>
   <div class="sub">AWS(<code>aws ...</code>)/Azure(<code>az ...</code>) CLI로 추출한 정책·구성 텍스트를 붙여넣거나 업로드하면, <b>인터넷·AI 없이</b> 이슈를 찾고 개선안을 제안합니다. 플랫폼은 자동으로 구별됩니다.</div>
 </header>
 <div class="tabs">
@@ -259,33 +259,62 @@ function fallbackCopy(text){
 function clearAll(){ document.getElementById('input').value=''; document.getElementById('result-card').style.display='none'; document.getElementById('err').textContent=''; }
 function loadFile(){
   var f=document.getElementById('file').files[0];
-  if(!f){ document.getElementById('err').textContent='파일을 먼저 선택하세요.'; return; }
   var meta=document.getElementById('load-info');
-  if(meta) meta.textContent='불러오는 중... ('+f.name+')';
-  document.getElementById('err').textContent='';
+  var errEl=document.getElementById('err');
+  if(!f){ errEl.textContent='파일을 먼저 선택하세요.'; return; }
+  errEl.textContent='';
+  // 최초 버전과 동일하게 브라우저의 readAsText로 그대로 읽는다(대부분 UTF-8이라 정상).
+  // 다만 결과에 깨짐 문자(U+FFFD)가 보이면 UTF-8이 아닌 파일(UTF-16/cp949)이므로,
+  // 그때만 서버(파이썬)에 원본 바이트를 보내 정확히 디코딩해 자동 교정한다.
   var r=new FileReader();
-  r.onload=async function(e){
-    // 인코딩 판별은 서버(파이썬)에 맡긴다. 브라우저 TextDecoder는
-    // BOM 없는 UTF-16을 감지 못하고 euc-kr 미지원 브라우저도 있어서다.
-    // 파일 원시 바이트를 그대로 /api/decode 로 보내 디코딩된 텍스트를 받는다.
+  r.onload=function(e){
+    var text=e.target.result;
+    if(text.indexOf('\uFFFD')<0){
+      // 깨짐 없음 → 최초 버전 그대로. 성공.
+      document.getElementById('input').value=text;
+      if(meta) meta.textContent='불러옴: '+f.name+' ('+f.size+' bytes)';
+      return;
+    }
+    // 깨짐 감지 → 서버 디코딩으로 재시도.
+    if(meta) meta.textContent='인코딩 자동 교정 중... ('+f.name+')';
+    serverDecode(f, meta, errEl);
+  };
+  r.onerror=function(){ errEl.textContent='파일 읽기에 실패했습니다.'; };
+  r.readAsText(f);
+}
+function serverDecode(f, meta, errEl){
+  // 파일을 Base64로 만들어 /api/decode 로 보낸다(구형 브라우저 호환 위해 XHR 사용).
+  var r=new FileReader();
+  r.onload=function(e){
     try{
-      var resp=await fetch('/api/decode',{
-        method:'POST',
-        headers:{'Content-Type':'application/octet-stream'},
-        body:e.target.result   // ArrayBuffer(원시 바이트)
-      });
-      var data=await resp.json();
-      if(!data.ok){ document.getElementById('err').textContent=data.error||'파일 디코딩 실패'; if(meta) meta.textContent=''; return; }
-      document.getElementById('input').value=data.text;
-      document.getElementById('err').textContent='';
-      if(meta) meta.textContent='불러옴: '+f.name+' ('+f.size+' bytes, 인코딩: '+data.encoding+')';
+      var dataUrl=e.target.result;                 // "data:...;base64,XXXX"
+      var b64=dataUrl.indexOf(',')>=0 ? dataUrl.split(',')[1] : dataUrl;
+      var xhr=new XMLHttpRequest();
+      xhr.open('POST','/api/decode',true);
+      xhr.setRequestHeader('Content-Type','text/plain; charset=utf-8');
+      xhr.onreadystatechange=function(){
+        if(xhr.readyState!==4) return;
+        if(xhr.status<200 || xhr.status>=300){
+          errEl.textContent='서버 응답 오류(HTTP '+xhr.status+'). 프로그램이 실행 중인지 확인하세요.';
+          if(meta) meta.textContent=''; return;
+        }
+        var data;
+        try{ data=JSON.parse(xhr.responseText); }
+        catch(pe){ errEl.textContent='서버 응답을 해석하지 못했습니다.'; if(meta) meta.textContent=''; return; }
+        if(!data.ok){ errEl.textContent=data.error||'파일 디코딩 실패'; if(meta) meta.textContent=''; return; }
+        document.getElementById('input').value=data.text;
+        errEl.textContent='';
+        if(meta) meta.textContent='불러옴: '+f.name+' ('+f.size+' bytes, 인코딩: '+data.encoding+')';
+      };
+      xhr.onerror=function(){ errEl.textContent='서버에 연결하지 못했습니다.'; if(meta) meta.textContent=''; };
+      xhr.send(b64);
     }catch(err){
-      document.getElementById('err').textContent='파일을 읽는 중 오류: '+err;
+      errEl.textContent='파일을 읽는 중 오류: '+err;
       if(meta) meta.textContent='';
     }
   };
-  r.onerror=function(){ document.getElementById('err').textContent='파일 읽기에 실패했습니다.'; if(meta) meta.textContent=''; };
-  r.readAsArrayBuffer(f);
+  r.onerror=function(){ errEl.textContent='파일 읽기에 실패했습니다.'; if(meta) meta.textContent=''; };
+  r.readAsDataURL(f);
 }
 async function runAudit(){
   document.getElementById('err').textContent='';
@@ -442,6 +471,9 @@ class Handler(BaseHTTPRequestHandler):
         body = html.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        # 브라우저가 옛 화면을 캐시에 붙잡지 않도록(코드 갱신 후 새로고침만으로 반영).
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -530,12 +562,29 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "not found"}, status=404)
 
     def _handle_decode(self):
-        """파일 원시 바이트를 받아 인코딩을 판별·디코딩해 텍스트로 돌려준다."""
+        """파일 바이트를 받아 인코딩을 판별·디코딩해 텍스트로 돌려준다.
+
+        두 가지 전송 방식을 모두 지원한다(구형 브라우저 호환):
+          - Content-Type: text/plain  → 본문이 Base64 문자열(구형 브라우저용, 권장)
+          - 그 외                      → 본문이 원시 바이트
+        """
         try:
             data, err = self._read_raw_bytes()
             if err:
                 self._send_json({"ok": False, "error": err}, status=413)
                 return
+            ctype = (self.headers.get("Content-Type") or "").lower()
+            if "text/plain" in ctype or "base64" in ctype:
+                # Base64 문자열로 전송된 경우 디코딩(구형 브라우저 XHR 방식).
+                import base64
+                raw = data.decode("ascii", errors="ignore").strip()
+                # "data:...;base64," 접두어가 붙어 오면 제거.
+                if "," in raw and raw[:5].lower() == "data:":
+                    raw = raw.split(",", 1)[1]
+                try:
+                    data = base64.b64decode(raw)
+                except Exception:  # noqa: BLE001 - 잘못된 base64면 원시로 취급
+                    pass
             text, enc = decode_bytes(data)
             self._send_json({"ok": True, "text": text, "encoding": enc})
         except Exception as e:  # noqa: BLE001
