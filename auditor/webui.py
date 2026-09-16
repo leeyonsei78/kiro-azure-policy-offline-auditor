@@ -32,6 +32,27 @@ logger = logging.getLogger(__name__)
 _MAX_BODY = 8 * 1024 * 1024
 
 
+def _export_filename(uploaded_name: str, ext: str) -> str:
+    """다운로드 파일명 생성. 업로드 파일명이 있으면 포함.
+
+    업로드 O: 'audit_<파일명>_<날짜시간>.ext'
+    업로드 X: 'azure-audit_<날짜시간>.ext'
+    (webui의 JS _tsName/_baseFromLoaded 와 동일 규칙을 서버에서도 적용)
+    """
+    import datetime
+    import re as _re
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    base = (uploaded_name or "").strip()
+    if base:
+        dot = base.rfind(".")
+        if dot > 0:
+            base = base[:dot]                       # 확장자 제거
+        base = _re.sub(r'[\\/:*?"<>|]+', "_", base).strip()
+    if base:
+        return f"audit_{base}_{stamp}.{ext}"
+    return f"azure-audit_{stamp}.{ext}"
+
+
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -432,7 +453,7 @@ async function downloadCsv(){
   var text=document.getElementById('input').value;
   if(!text.trim()){ document.getElementById('err').textContent='먼저 보안검토를 실행하세요.'; return; }
   try{
-    var resp=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,format:'csv'})});
+    var resp=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,format:'csv',filename:LOADED_FILENAME})});
     var blob=await resp.blob();
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');
@@ -445,7 +466,7 @@ async function downloadXlsx(){
   var text=document.getElementById('input').value;
   if(!text.trim()){ document.getElementById('err').textContent='먼저 보안검토를 실행하세요.'; return; }
   try{
-    var resp=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,format:'xlsx'})});
+    var resp=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,format:'xlsx',filename:LOADED_FILENAME})});
     var blob=await resp.blob();
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');
@@ -535,17 +556,33 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_json({"ok": False, "error": "not found"}, status=404)
 
-    def _send_text(self, text, content_type="text/plain; charset=utf-8", status=200):
+    def _disposition(self, filename):
+        """다운로드 파일명 헤더 값 생성. 한글 등 비ASCII는 RFC 5987로 인코딩.
+
+        브라우저의 <a download> 속성 지원 여부와 무관하게 파일명이 적용되도록
+        서버가 직접 Content-Disposition을 내려준다(구형 브라우저 대응).
+        """
+        from urllib.parse import quote
+        # ASCII 폴백 파일명(비ASCII는 _ 로 치환)과 UTF-8 filename* 를 함께 제공.
+        ascii_name = filename.encode("ascii", "replace").decode("ascii").replace("?", "_")
+        star = quote(filename, safe="")
+        return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{star}"
+
+    def _send_text(self, text, content_type="text/plain; charset=utf-8", status=200, filename=None):
         body = text.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        if filename:
+            self.send_header("Content-Disposition", self._disposition(filename))
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_bytes(self, data: bytes, content_type: str, status=200):
+    def _send_bytes(self, data: bytes, content_type: str, status=200, filename=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        if filename:
+            self.send_header("Content-Disposition", self._disposition(filename))
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -631,16 +668,22 @@ class Handler(BaseHTTPRequestHandler):
                 return
             fmt = str(payload.get("format", "csv")).lower()
             report = analyze(payload.get("text", ""))
+            # 클라이언트가 보낸 업로드 파일명(base)으로 다운로드 파일명을 서버에서 확정.
+            # 이렇게 하면 브라우저 <a download> 지원 여부와 무관하게 파일명이 적용된다.
+            ext = "csv" if fmt == "csv" else ("xlsx" if fmt == "xlsx" else "html")
+            fname = _export_filename(payload.get("filename", ""), ext)
             if fmt == "html":
+                # HTML은 새 창에서 열어 인쇄하므로 다운로드 파일명(Content-Disposition) 불필요.
                 self._send_text(format_html(report), "text/html; charset=utf-8")
             elif fmt == "csv":
                 # CSV(BOM 포함). 브라우저 JS가 Blob으로 받아 파일 저장.
-                self._send_text(format_csv(report), "text/csv; charset=utf-8")
+                self._send_text(format_csv(report), "text/csv; charset=utf-8", filename=fname)
             elif fmt == "xlsx":
                 # 진짜 엑셀(.xlsx) 바이트. CSV의 셀 분리/데이터 손실 없음.
                 self._send_bytes(
                     format_xlsx(report),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    filename=fname,
                 )
             else:
                 self._send_json({"ok": False, "error": "지원하지 않는 format"}, status=400)
