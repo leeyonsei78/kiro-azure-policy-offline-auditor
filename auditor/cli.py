@@ -5,6 +5,7 @@
   python -m auditor <파일.txt> --json       # JSON 리포트
   python -m auditor <파일.txt> --csv --out result.csv    # CSV(엑셀)로 저장
   python -m auditor <파일.txt> --html --out report.html  # HTML(인쇄→PDF)로 저장
+  python -m auditor <파일.txt> --xlsx --out report.xlsx  # 엑셀(.xlsx)로 저장(데이터 손실 없음)
   cat policy.txt | python -m auditor        # stdin 입력
   python -m auditor --controls              # ISMS-P 통제항목 목록 출력
   python -m auditor --commands              # 정보 수집 CLI 명령어(기본 AWS+Azure)
@@ -23,7 +24,7 @@ import sys
 
 from .engine import analyze
 from .knowledge_base import all_controls, collection_commands
-from .report import format_csv, format_html, format_text
+from .report import format_csv, format_html, format_text, format_xlsx
 
 
 def _read_input(path: str | None) -> str:
@@ -80,6 +81,7 @@ def main(argv=None) -> int:
     parser.add_argument("--json", action="store_true", help="JSON 리포트 출력")
     parser.add_argument("--csv", action="store_true", help="CSV(엑셀용) 리포트 출력")
     parser.add_argument("--html", action="store_true", help="HTML 리포트 출력(브라우저 인쇄로 PDF 저장)")
+    parser.add_argument("--xlsx", action="store_true", help="엑셀(.xlsx) 리포트 저장(--out 필수)")
     parser.add_argument("--out", "-o", metavar="FILE", help="결과를 파일로 저장(미지정 시 화면 출력)")
     parser.add_argument("--controls", action="store_true", help="ISMS-P 통제항목 목록 출력 후 종료")
     parser.add_argument("--commands", action="store_true",
@@ -116,6 +118,23 @@ def main(argv=None) -> int:
         return 2
 
     report = analyze(text)
+
+    # --- 엑셀(.xlsx)은 바이너리 → --out 필수, 별도 처리 ---
+    if args.xlsx:
+        if not args.out:
+            print("--xlsx 는 바이너리 파일이라 --out(-o) 저장 경로가 필요합니다.\n"
+                  "예) python -m auditor policy.txt --xlsx --out report.xlsx", file=sys.stderr)
+            return 2
+        out = args.out if args.out.lower().endswith(".xlsx") else args.out + ".xlsx"
+        try:
+            with open(out, "wb") as fh:
+                fh.write(format_xlsx(report))
+        except OSError as e:
+            print(f"파일 저장 실패: {e}", file=sys.stderr)
+            return 2
+        print(f"저장 완료: {out}  (이슈 {len(report.findings)}건, 점수 {report.score()}/100 {report.grade()})",
+              file=sys.stderr)
+        return 1 if report.findings else 0
 
     # 출력 포맷 선택 (우선순위: csv > html > json > text)
     if args.csv:

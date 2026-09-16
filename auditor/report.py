@@ -236,3 +236,126 @@ def format_html(report: AuditReport) -> str:
   {body_sections}
   <div class="foot">※ 본 리포트는 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.</div>
 </body></html>"""
+
+
+
+# ---------------------------------------------------------------------------
+# XLSX (진짜 엑셀) — 표준 라이브러리 zipfile만으로 생성(폐쇄망 OK).
+#   .xlsx는 XML들을 담은 ZIP이므로 외부 패키지 없이 최소 스펙으로 직접 만든다.
+#   각 셀은 inlineStr(t="inlineStr")로 기록해 줄바꿈·쉼표·따옴표를 안전하게 보존한다
+#   → CSV에서 발생하던 셀 분리/데이터 손실 문제가 없다.
+# ---------------------------------------------------------------------------
+def _xl_esc(s) -> str:
+    """XML 셀 값 이스케이프(제어문자 제거 + 엔티티 치환)."""
+    s = "" if s is None else str(s)
+    # 엑셀이 허용하지 않는 제어문자 제거(탭/개행/캐리지리턴은 유지)
+    s = "".join(ch for ch in s if ch >= " " or ch in "\t\n\r")
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&apos;"))
+
+
+def _col_ref(idx: int) -> str:
+    """0-기반 열 인덱스 → 엑셀 열 문자(A, B, ..., Z, AA...)."""
+    ref = ""
+    idx += 1
+    while idx:
+        idx, rem = divmod(idx - 1, 26)
+        ref = chr(65 + rem) + ref
+    return ref
+
+
+def _sheet_xml(rows: list[list], freeze_header: bool = True) -> str:
+    """행 목록(문자열 2차원 배열)을 워크시트 XML로."""
+    out = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+           '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">']
+    if freeze_header and rows:
+        out.append('<sheetViews><sheetView workbookViewId="0">'
+                    '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+                    '</sheetView></sheetViews>')
+    out.append("<sheetData>")
+    for r, row in enumerate(rows, start=1):
+        cells = []
+        for c, val in enumerate(row):
+            ref = f"{_col_ref(c)}{r}"
+            cells.append(f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">'
+                         f'{_xl_esc(val)}</t></is></c>')
+        out.append(f'<row r="{r}">{"".join(cells)}</row>')
+    out.append("</sheetData></worksheet>")
+    return "".join(out)
+
+
+def format_xlsx(report: AuditReport) -> bytes:
+    """검토 결과를 진짜 엑셀(.xlsx) 바이트로 생성.
+
+    시트 2개: '요약'(점수/등급/건수/플랫폼), '상세'(이슈 목록 표).
+    표준 라이브러리(zipfile)만 사용 — 폐쇄망에서 추가 설치 없이 동작.
+    """
+    import io
+    import zipfile
+
+    # --- 요약 시트 데이터 ---
+    counts = report.severity_counts()
+    csum = ", ".join(f"{k}={counts[k]}" for k in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO") if k in counts)
+    summary_rows = [
+        ["항목", "값"],
+        ["점수", f"{report.score()}/100"],
+        ["등급", report.grade()],
+        ["입력형식", report.input_kind],
+        ["파싱 리소스", str(report.parsed_resources)],
+        ["발견 이슈", str(len(report.findings))],
+        ["심각도 분포", csum],
+        ["플랫폼별", _platform_summary(report)],
+        ["", ""],
+        ["※ 오프라인 규칙 기반 자동 검토 결과이며 참고용. KISA 공식 심사자료를 대체하지 않음.", ""],
+    ]
+
+    # --- 상세 시트 데이터 ---
+    detail_rows = [[label for _, label in _CSV_COLUMNS]]
+    for f in sorted(report.findings, key=lambda x: x.severity, reverse=True):
+        row = f.to_dict()
+        row["platform"] = _plat_label(row.get("platform", ""))
+        detail_rows.append([str(row.get(key, "")) for key, _ in _CSV_COLUMNS])
+
+    # --- xlsx(zip) 구성 ---
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        "</Types>"
+    )
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        "</Relationships>"
+    )
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets>'
+        '<sheet name="요약" sheetId="1" r:id="rId1"/>'
+        '<sheet name="상세" sheetId="2" r:id="rId2"/>'
+        "</sheets></workbook>"
+    )
+    workbook_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>'
+        "</Relationships>"
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types)
+        z.writestr("_rels/.rels", root_rels)
+        z.writestr("xl/workbook.xml", workbook)
+        z.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        z.writestr("xl/worksheets/sheet1.xml", _sheet_xml(summary_rows, freeze_header=False))
+        z.writestr("xl/worksheets/sheet2.xml", _sheet_xml(detail_rows, freeze_header=True))
+    return buf.getvalue()

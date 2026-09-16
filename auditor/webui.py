@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .engine import analyze
 from .knowledge_base import all_controls, collection_commands
-from .report import format_csv, format_html
+from .report import format_csv, format_html, format_xlsx
 
 logger = logging.getLogger(__name__)
 
@@ -135,9 +135,10 @@ INDEX_HTML = """<!DOCTYPE html>
       </div>
     </div>
     <div class="row" style="margin-top:12px">
-      <button class="btn" onclick="downloadCsv()">⬇️ CSV 저장 (엑셀)</button>
+      <button class="btn primary" onclick="downloadXlsx()">⬇️ 엑셀(.xlsx) 저장</button>
+      <button class="btn" onclick="downloadCsv()">CSV 저장</button>
       <button class="btn" onclick="openPdf()">🖨️ PDF로 저장 (인쇄)</button>
-      <span class="hint">CSV는 엑셀에서 열립니다. PDF는 새 창의 인쇄 대화상자에서 "PDF로 저장"을 선택하세요.</span>
+      <span class="hint">엑셀(.xlsx)은 줄바꿈·특수문자가 그대로 보존됩니다(권장). PDF는 새 창의 인쇄 대화상자에서 "PDF로 저장"을 선택하세요.</span>
     </div>
     <div id="findings"></div>
     <div class="hint" style="margin-top:14px">※ 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.</div>
@@ -351,6 +352,19 @@ async function downloadCsv(){
     setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
   }catch(e){ document.getElementById('err').textContent='CSV 저장 실패: '+e; }
 }
+async function downloadXlsx(){
+  var text=document.getElementById('input').value;
+  if(!text.trim()){ document.getElementById('err').textContent='먼저 보안검토를 실행하세요.'; return; }
+  try{
+    var resp=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,format:'xlsx'})});
+    var blob=await resp.blob();
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url; a.download=_tsName('xlsx');
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  }catch(e){ document.getElementById('err').textContent='엑셀 저장 실패: '+e; }
+}
 async function openPdf(){
   var text=document.getElementById('input').value;
   if(!text.trim()){ document.getElementById('err').textContent='먼저 보안검토를 실행하세요.'; return; }
@@ -413,6 +427,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_bytes(self, data: bytes, content_type: str, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _read_payload(self):
         """요청 본문을 dict로. (payload, error_response) 반환."""
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -461,6 +482,12 @@ class Handler(BaseHTTPRequestHandler):
             elif fmt == "csv":
                 # CSV(BOM 포함). 브라우저 JS가 Blob으로 받아 파일 저장.
                 self._send_text(format_csv(report), "text/csv; charset=utf-8")
+            elif fmt == "xlsx":
+                # 진짜 엑셀(.xlsx) 바이트. CSV의 셀 분리/데이터 손실 없음.
+                self._send_bytes(
+                    format_xlsx(report),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
             else:
                 self._send_json({"ok": False, "error": "지원하지 않는 format"}, status=400)
         except Exception as e:  # noqa: BLE001
