@@ -259,8 +259,35 @@ function loadFile(){
   var f=document.getElementById('file').files[0];
   if(!f){ document.getElementById('err').textContent='파일을 먼저 선택하세요.'; return; }
   var r=new FileReader();
-  r.onload=function(e){ document.getElementById('input').value=e.target.result; document.getElementById('err').textContent=''; };
-  r.readAsText(f);
+  r.onload=function(e){
+    // 파일 인코딩이 UTF-8이 아닐 수 있음(Windows 메모장/PowerShell은 cp949·UTF-16 저장이 흔함).
+    // 바이트로 읽어 BOM 확인 + UTF-8 우선, 실패 시 EUC-KR(cp949)로 폴백 디코딩한다.
+    var buf=e.target.result;
+    var bytes=new Uint8Array(buf);
+    var text=decodeSmart(bytes);
+    document.getElementById('input').value=text;
+    document.getElementById('err').textContent='';
+  };
+  r.readAsArrayBuffer(f);
+}
+function decodeSmart(bytes){
+  // BOM 감지
+  if(bytes.length>=3 && bytes[0]===0xEF && bytes[1]===0xBB && bytes[2]===0xBF){
+    return new TextDecoder('utf-8').decode(bytes.subarray(3));
+  }
+  if(bytes.length>=2 && bytes[0]===0xFF && bytes[1]===0xFE){
+    return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+  }
+  if(bytes.length>=2 && bytes[0]===0xFE && bytes[1]===0xFF){
+    return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+  }
+  // BOM 없음: UTF-8을 fatal로 시도 → 실패하면 cp949(euc-kr)
+  try{
+    return new TextDecoder('utf-8', {fatal:true}).decode(bytes);
+  }catch(e){
+    try{ return new TextDecoder('euc-kr').decode(bytes); }
+    catch(e2){ return new TextDecoder('utf-8').decode(bytes); }
+  }
 }
 async function runAudit(){
   document.getElementById('err').textContent='';
