@@ -113,6 +113,29 @@ class EvidenceAndExampleTest(unittest.TestCase):
         self.assertTrue(f["bad_example"])
         self.assertTrue(f["good_example"])
 
+    def test_findings_have_why_and_howto(self):
+        # 초보 담당자용 '왜 문제인가(why)'와 '해결 방법(how_to_fix)'이 채워져야 한다.
+        txt = json.dumps([{"name": "stg1", "allowBlobPublicAccess": True}])
+        f = [x for x in self._findings(txt) if x["issue_type"] == "storage_public_blob"][0]
+        self.assertTrue(f["why"], "why(왜 문제인가)가 비어 있음")
+        self.assertTrue(f["how_to_fix"], "how_to_fix(해결 방법)가 비어 있음")
+        # 해결 방법은 단계별(번호) 안내 형태여야 한다.
+        self.assertIn("1)", f["how_to_fix"])
+
+    def test_sql_findings_have_why_and_howto(self):
+        # SQL 심층 점검 항목에도 why/how_to_fix가 있어야 한다.
+        txt = json.dumps([{"name": "srv1", "publicNetworkAccess": "Enabled"}])
+        f = [x for x in self._findings(txt) if x["issue_type"] == "sql_public_access"][0]
+        self.assertTrue(f["why"])
+        self.assertTrue(f["how_to_fix"])
+
+    def test_evidence_is_longer_context(self):
+        # 근거 텍스트가 충분한 문맥을 담는지(짧게 잘리지 않는지) 확인.
+        txt = ("az monitor diagnostic-settings list 결과: [] "
+               "(no diagnostic settings configured for prod-vm and prod-sql server)")
+        f = [x for x in self._findings(txt) if x["issue_type"] == "diagnostic_missing"][0]
+        self.assertGreater(len(f["evidence"]), 40)
+
 
 class NewCommandCoverageTest(unittest.TestCase):
     """새로 추가한 수집 명령어가 명령어 가이드에 포함됐는지 확인."""

@@ -68,13 +68,20 @@ def format_text(report: AuditReport) -> str:
             if f.resource:
                 lines.append(f"      대상: {f.resource}")
             lines.append(f"      문제: {f.description}")
+            if getattr(f, "why", ""):
+                lines.append(f"      왜 문제인가: {f.why}")
             lines.append(f"      개선: {f.recommendation}")
+            if getattr(f, "how_to_fix", ""):
+                lines.append("      해결 방법(단계별):")
+                for step in f.how_to_fix.splitlines():
+                    if step.strip():
+                        lines.append(f"        {step.strip()}")
             if getattr(f, "bad_example", ""):
                 lines.append(f"      위반 예시: {f.bad_example}")
             if getattr(f, "good_example", ""):
                 lines.append(f"      개선 예시: {f.good_example}")
             if f.evidence:
-                lines.append(f"      근거: {f.evidence[:160]}")
+                lines.append(f"      판단 근거: {f.evidence[:400]}")
             lines.append("")
         if ctrl.get("cmd"):
             lines.append(f"      [참고] {_plat_label(plat)} 재점검 CLI:")
@@ -100,10 +107,12 @@ _CSV_COLUMNS = [
     ("title", "제목"),
     ("resource", "대상리소스"),
     ("description", "문제(판단기준)"),
+    ("why", "왜 문제인가"),
     ("recommendation", "개선방안"),
+    ("how_to_fix", "해결 방법(단계별)"),
     ("bad_example", "위반예시"),
     ("good_example", "개선예시"),
-    ("evidence", "근거"),
+    ("evidence", "판단 근거"),
 ]
 
 
@@ -166,8 +175,13 @@ def format_html(report: AuditReport) -> str:
         for f in by_key[(code, plat)]:
             sev = f.severity.name
             color = _SEV_COLOR.get(sev, "#555")
-            evi = f"<div class='evi'>{_esc(f.evidence[:220])}</div>" if f.evidence else ""
+            evi = (f"<div class='evlabel'><b>🔎 판단 근거(입력에서 감지된 내용)</b></div>"
+                   f"<div class='evi'>{_esc(f.evidence[:400])}</div>" if f.evidence else "")
             res = f"<div class='res'><b>대상:</b> {_esc(f.resource)}</div>" if f.resource else ""
+            why = (f"<div class='why'><b>❓ 왜 문제인가요?</b><br>{_esc(getattr(f, 'why', '')).replace(chr(10), '<br>')}</div>"
+                   if getattr(f, "why", "") else "")
+            howto = (f"<div class='howto'><b>🛠️ 해결 방법(단계별)</b><br>{_esc(getattr(f, 'how_to_fix', '')).replace(chr(10), '<br>')}</div>"
+                     if getattr(f, "how_to_fix", "") else "")
             bad = (f"<div class='ex bad'><b>✗ 위반 예시:</b> <code>{_esc(f.bad_example)}</code></div>"
                    if getattr(f, "bad_example", "") else "")
             good = (f"<div class='ex good'><b>✓ 개선 예시:</b> <code>{_esc(f.good_example)}</code></div>"
@@ -178,7 +192,9 @@ def format_html(report: AuditReport) -> str:
                 f"<span class='ftitle'>{_esc(f.title)}</span></div>"
                 f"{res}"
                 f"<div class='p'><b>문제:</b> {_esc(f.description)}</div>"
+                f"{why}"
                 f"<div class='fix'><b>개선:</b> {_esc(f.recommendation)}</div>"
+                f"{howto}"
                 f"{bad}{good}{evi}</div>"
             )
         cmd_html = ""
@@ -215,6 +231,9 @@ def format_html(report: AuditReport) -> str:
   .ftitle{{ font-weight:700; }}
   .res,.p,.fix{{ margin-top:3px; }}
   .fix{{ background:#f2f7ff; border-left:3px solid #2980b9; padding:4px 8px; }}
+  .why{{ margin-top:4px; background:#fdf6e3; border-left:3px solid #d6a412; padding:4px 8px; font-size:12px; line-height:1.5; }}
+  .howto{{ margin-top:4px; background:#eef5ff; border-left:3px solid #2980b9; padding:4px 8px; font-size:12px; line-height:1.55; }}
+  .evlabel{{ margin-top:6px; font-size:11px; color:#555; }}
   .ex{{ margin-top:4px; padding:4px 8px; border-radius:4px; font-size:12px; }}
   .ex code{{ font-family:Consolas,monospace; word-break:break-all; }}
   .ex.bad{{ background:#fdecea; border-left:3px solid #c0392b; }}

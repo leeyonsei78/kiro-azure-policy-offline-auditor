@@ -22,6 +22,10 @@ SQL_CHECKS: list[dict] = [
         "fix": "az sql db tde set --status Enabled 로 TDE를 즉시 활성화. 신규 DB는 기본 활성이나 마이그레이션·복원 DB는 반드시 확인",
         "bad_example": "{ \"name\": \"tde\", \"state\": \"Disabled\" }",
         "good_example": "{ \"name\": \"current\", \"state\": \"Enabled\" }",
+        "why": "TDE는 데이터베이스 파일과 백업을 저장 단계에서 자동 암호화합니다. 꺼져 있으면 디스크·백업이 유출될 때 "
+               "DB 내용이 평문으로 그대로 노출됩니다.",
+        "how_to_fix": "1) az sql db tde set --status Enabled 로 TDE를 켭니다.\n"
+                      "2) 신규 DB는 기본 활성이지만, 복원·마이그레이션한 DB는 반드시 상태를 확인합니다.",
     },
     {
         "key": "sql_cmk_not_used",
@@ -32,6 +36,11 @@ SQL_CHECKS: list[dict] = [
         "fix": "Key Vault 키를 등록(az sql server key create) 후 az sql server tde-key set --server-key-type AzureKeyVault 로 CMK 전환. Key Vault는 Soft-delete·Purge Protection 필수",
         "bad_example": "{ \"serverKeyType\": \"ServiceManaged\" }",
         "good_example": "{ \"serverKeyType\": \"AzureKeyVault\", \"uri\": \"https://<kv>.vault.azure.net/keys/<key>/<ver>\" }",
+        "why": "데이터는 암호화되지만 암호화 키를 클라우드 제공자가 관리합니다. 금융·공공 등 규제 환경에서는 조직이 키를 "
+               "직접 통제(생성·회수)하도록 요구하는 경우가 많아, 이 상태는 규정 미준수가 될 수 있습니다.",
+        "how_to_fix": "1) Key Vault에 키를 만들고 SQL 서버에 등록합니다(az sql server key create).\n"
+                      "2) az sql server tde-key set --server-key-type AzureKeyVault 로 CMK로 전환합니다.\n"
+                      "3) 해당 Key Vault는 Soft-delete·Purge Protection을 반드시 켭니다.",
     },
     {
         "key": "sql_public_access",
@@ -42,6 +51,11 @@ SQL_CHECKS: list[dict] = [
         "fix": "az sql server update --set publicNetworkAccess=Disabled. 필요한 IP만 방화벽 규칙으로 최소 허용하고, AllowAllWindowsAzureIps(0.0.0.0) 규칙은 제거",
         "bad_example": "{ \"publicNetworkAccess\": \"Enabled\" }  또는  방화벽 규칙 { \"startIpAddress\": \"0.0.0.0\", \"endIpAddress\": \"255.255.255.255\" }",
         "good_example": "{ \"publicNetworkAccess\": \"Disabled\" }  (Private Endpoint로만 접근)",
+        "why": "데이터베이스가 인터넷에서 직접 접근 가능합니다. 특히 방화벽이 0.0.0.0(전체 허용)이면 사실상 누구나 "
+               "접속 시도를 할 수 있어, 무차별 대입·SQL Injection의 표적이 됩니다.",
+        "how_to_fix": "1) az sql server update --set publicNetworkAccess=Disabled 로 퍼블릭 접근을 끕니다.\n"
+                      "2) 0.0.0.0 전체 허용 방화벽 규칙(AllowAllAzureIps 등)을 삭제합니다.\n"
+                      "3) 접근이 필요한 특정 IP만 방화벽에 최소로 등록하거나 Private Endpoint를 사용합니다.",
     },
     {
         "key": "sql_no_private_endpoint",
@@ -52,6 +66,11 @@ SQL_CHECKS: list[dict] = [
         "fix": "az network private-endpoint create 로 SQL용 Private Endpoint를 구성하고 Private DNS Zone(privatelink.database.windows.net) 연결. 이후 publicNetworkAccess=Disabled",
         "bad_example": "{ \"privateEndpointConnections\": [] }",
         "good_example": "{ \"privateEndpointConnections\": [ { \"properties\": { \"privateLinkServiceConnectionState\": { \"status\": \"Approved\" } } } ] }",
+        "why": "SQL 서버가 사설 연결(Private Endpoint) 없이 퍼블릭 경로로만 접근됩니다. 퍼블릭 접근 허용과 겹치면 "
+               "인터넷 노출 위험이 더 커집니다.",
+        "how_to_fix": "1) az network private-endpoint create 로 SQL용 Private Endpoint를 만듭니다.\n"
+                      "2) Private DNS Zone(privatelink.database.windows.net)을 연결합니다.\n"
+                      "3) 이후 publicNetworkAccess=Disabled 로 퍼블릭 경로를 닫습니다.",
     },
     {
         "key": "sql_auditing_disabled",
@@ -62,6 +81,11 @@ SQL_CHECKS: list[dict] = [
         "fix": "az sql server audit-policy update --state Enabled --bsts Enabled 등으로 Log Analytics·Storage로 감사 로그를 보내고, 보존기간을 조직 기준(예: 90일 이상)으로 설정",
         "bad_example": "{ \"state\": \"Disabled\", \"retentionDays\": 0 }",
         "good_example": "{ \"state\": \"Enabled\", \"retentionDays\": 90, \"isAzureMonitorTargetEnabled\": true }",
+        "why": "데이터베이스 접근·변경 기록(감사 로그)이 남지 않습니다. 정보 유출·부정 접근이 있어도 누가 무엇을 했는지 "
+               "추적할 수 없어, 사고 대응과 법적 증빙이 불가능합니다.",
+        "how_to_fix": "1) az sql server audit-policy update --state Enabled 로 감사를 켭니다.\n"
+                      "2) 로그를 Log Analytics 또는 Storage로 보냅니다.\n"
+                      "3) 보존기간을 조직 기준(예: 90일 이상)으로 설정합니다.",
     },
     {
         "key": "sql_defender_disabled",
@@ -72,6 +96,11 @@ SQL_CHECKS: list[dict] = [
         "fix": "az sql server advanced-threat-protection-setting update --state Enabled, 또는 az security pricing create -n SqlServers --tier Standard 로 Defender for SQL 활성화",
         "bad_example": "{ \"state\": \"Disabled\" }  /  Defender pricingTier: \"Free\"",
         "good_example": "{ \"state\": \"Enabled\" }  /  Defender pricingTier: \"Standard\"",
+        "why": "SQL에 대한 지능형 위협 탐지가 꺼져 있습니다. SQL Injection·비정상 접근 같은 공격이 실시간으로 "
+               "탐지·경고되지 않아, 침해가 발생해도 인지하지 못할 수 있습니다.",
+        "how_to_fix": "1) az sql server advanced-threat-protection-setting update --state Enabled 로 켭니다.\n"
+                      "2) 또는 az security pricing create -n SqlServers --tier Standard 로 Defender for SQL을 활성화합니다.\n"
+                      "3) 경고 수신 이메일을 설정합니다.",
     },
     {
         "key": "sql_va_disabled",
@@ -82,6 +111,11 @@ SQL_CHECKS: list[dict] = [
         "fix": "az sql server vulnerability-assessment update 로 저장소 연결 + 정기 스캔(recurringScans) 활성화 + 결과 이메일 수신 설정. Defender for SQL과 함께 사용",
         "bad_example": "{ \"recurringScans\": { \"isEnabled\": false } }",
         "good_example": "{ \"storageContainerPath\": \"https://<sa>.blob.core.windows.net/vulnerability-assessment\", \"recurringScans\": { \"isEnabled\": true, \"emailSubscriptionAdmins\": true } }",
+        "why": "데이터베이스의 보안 취약점을 주기적으로 점검하지 않습니다. 설정 오류·권한 과다 같은 약점이 방치되어 "
+               "침해 통로로 이어질 수 있습니다.",
+        "how_to_fix": "1) az sql server vulnerability-assessment update 로 결과 저장소를 연결합니다.\n"
+                      "2) 정기 스캔(recurringScans)을 켜고 결과 이메일 수신을 설정합니다.\n"
+                      "3) Defender for SQL과 함께 사용해 탐지 범위를 넓힙니다.",
     },
     {
         "key": "sql_ltr_not_configured",
@@ -92,6 +126,11 @@ SQL_CHECKS: list[dict] = [
         "fix": "az sql db ltr-policy set --weekly-retention P4W --monthly-retention P12M --yearly-retention P7Y --week-of-year 1 등으로 조직/규제 기준에 맞춰 LTR 설정",
         "bad_example": "{ \"weeklyRetention\": \"PT0S\", \"monthlyRetention\": \"PT0S\", \"yearlyRetention\": \"PT0S\" }",
         "good_example": "{ \"weeklyRetention\": \"P4W\", \"monthlyRetention\": \"P12M\", \"yearlyRetention\": \"P7Y\" }",
+        "why": "장기 보존 백업이 없어, 오래된 시점으로 복구할 수 없습니다. 규제상 수년간 백업 보존이 요구되거나, "
+               "뒤늦게 발견된 데이터 훼손을 되돌려야 할 때 대응이 불가능합니다.",
+        "how_to_fix": "1) az sql db ltr-policy set 로 주/월/년 보존 정책을 설정합니다.\n"
+                      "2) 조직·규제 기준에 맞춰 보존기간을 정합니다(예: 주 4주·월 12개월·년 7년).\n"
+                      "3) 주기적으로 복원 테스트를 수행합니다.",
     },
 ]
 

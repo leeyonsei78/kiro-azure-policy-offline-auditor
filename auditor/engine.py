@@ -178,13 +178,238 @@ _EXAMPLES: dict[str, dict[str, str]] = {
 }
 
 
+# 이슈 유형별 '왜 문제인지(why)'와 '어떻게 해결하는지(how_to_fix, 단계별)' 설명.
+# 초보 담당자가 배경지식 없이도 위험과 조치 절차를 이해하도록 쉬운 말로 작성한다.
+_EXPLAIN: dict[str, dict[str, str]] = {
+    # ---- AWS 네트워크/접근 ----
+    "aws_sg_open_sensitive_port": {
+        "why": "서버 관리용 포트(SSH 22·RDP 3389 등)가 전 세계 인터넷(0.0.0.0/0)에 열려 있습니다. "
+               "공격자는 이런 포트를 자동으로 찾아 무차별 대입(비밀번호 추측)·알려진 취약점 공격을 시도합니다. "
+               "즉 계정 하나만 뚫려도 서버가 통째로 장악될 수 있는 상태입니다.",
+        "how_to_fix": "1) 이 규칙이 정말 전체 공개가 필요한지 확인합니다(대부분 불필요).\n"
+                      "2) 출발지(Source)를 회사 고정 IP나 내부 서브넷(예: 10.0.0.0/16)으로 좁힙니다.\n"
+                      "3) 관리 접속은 Bastion 호스트나 SSM Session Manager를 경유하도록 바꿉니다.\n"
+                      "4) 변경 후 실제 접속이 되는지 확인하고, 불필요한 규칙은 삭제합니다.",
+    },
+    "aws_sg_open_any": {
+        "why": "보안그룹이 모든 출발지(0.0.0.0/0)의 접근을 허용합니다. 열린 포트에 따라 위험도가 달라지지만, "
+               "출발지 제한이 없으면 공격 표면이 불필요하게 넓어집니다.",
+        "how_to_fix": "1) 이 규칙으로 어떤 서비스가 외부에 노출되는지 확인합니다.\n"
+                      "2) 웹 서비스(80/443)처럼 공개가 필요한 것만 남기고, 나머지는 출발지를 제한합니다.\n"
+                      "3) 공개가 필요한 경우에도 WAF·CloudFront 등을 앞단에 두는 것을 검토합니다.",
+    },
+    "aws_rds_public": {
+        "why": "데이터베이스가 인터넷에서 직접 접근 가능하도록 설정돼 있습니다. DB에는 보통 개인정보·업무 핵심 "
+               "데이터가 들어 있어, 노출되면 유출·랜섬웨어의 1순위 표적이 됩니다.",
+        "how_to_fix": "1) RDS 콘솔에서 해당 인스턴스의 '퍼블릭 액세스 가능'을 '아니오'로 변경합니다.\n"
+                      "2) DB를 프라이빗 서브넷에 두고, 애플리케이션 서버에서만 접근하도록 보안그룹을 설정합니다.\n"
+                      "3) 외부 접속이 꼭 필요하면 VPN이나 Bastion을 경유하게 합니다.",
+    },
+    # ---- AWS 암호화/노출 ----
+    "aws_s3_public_block_off": {
+        "why": "S3 버킷의 퍼블릭 접근 차단이 일부 꺼져 있습니다. 이 상태에서 실수로 공개 ACL·정책이 붙으면 "
+               "버킷 안 파일이 인터넷 누구에게나 노출됩니다(데이터 유출 사고의 대표 원인).",
+        "how_to_fix": "1) S3 콘솔 > 해당 버킷 > 권한 > '퍼블릭 액세스 차단' 4개 옵션을 모두 켭니다.\n"
+                      "2) 계정 레벨에서도 퍼블릭 차단을 켜 조직 전체에 안전망을 둡니다.\n"
+                      "3) 외부 공유가 필요한 파일은 CloudFront(OAC)나 서명된 URL로 대체합니다.",
+    },
+    "aws_s3_public_policy": {
+        "why": "버킷 정책이 모든 사용자(Principal:*)에게 접근을 허용합니다. 인증 없이 누구나 파일을 읽거나 "
+               "쓸 수 있어, 데이터 유출·변조 위험이 매우 큽니다.",
+        "how_to_fix": "1) 버킷 정책에서 \"Principal\":\"*\" 를 제거합니다.\n"
+                      "2) 접근이 필요한 특정 IAM 역할/사용자만 명시적으로 허용합니다.\n"
+                      "3) 웹 배포용이면 CloudFront + OAC 조합으로 바꿉니다.",
+    },
+    "aws_s3_no_encryption": {
+        "why": "버킷에 기본 암호화가 없어, 저장된 데이터가 평문으로 보관됩니다. 저장 매체 유출·권한 오설정 시 "
+               "내용이 그대로 노출됩니다.",
+        "how_to_fix": "1) S3 콘솔 > 버킷 > 속성 > '기본 암호화'를 켭니다(SSE-KMS 권장).\n"
+                      "2) 민감 데이터는 전용 KMS 키를 사용하고 키 접근 권한을 최소화합니다.",
+    },
+    "aws_ebs_snapshot_public": {
+        "why": "디스크 스냅샷이 전체 공개(all)로 공유돼 있습니다. 누구나 이 스냅샷으로 볼륨을 만들어 원본 "
+               "디스크의 모든 데이터를 복원해 볼 수 있습니다.",
+        "how_to_fix": "1) EC2 콘솔 > 스냅샷 > 권한 수정에서 '퍼블릭' 공유를 해제합니다.\n"
+                      "2) 공유가 필요하면 특정 AWS 계정 ID에만 공유합니다.\n"
+                      "3) 실수 재발 방지를 위해 '스냅샷 퍼블릭 공유 차단' 계정 설정을 켭니다.",
+    },
+    # ---- AWS IAM/자격증명 ----
+    "aws_iam_wildcard_admin": {
+        "why": "모든 작업(Action:*)을 모든 리소스(Resource:*)에 허용하는 전권 정책입니다. 이 자격증명이 "
+               "유출되면 공격자가 계정 전체를 마음대로 할 수 있습니다(최소권한 원칙 위배).",
+        "how_to_fix": "1) 이 정책을 실제로 필요한 작업·리소스만 허용하도록 분리합니다.\n"
+                      "2) 관리자 권한은 소수의 담당자에게만, 그것도 역할(Role) 전환 방식으로 부여합니다.\n"
+                      "3) IAM Access Analyzer로 실제 사용된 권한을 확인해 과다 권한을 줄입니다.",
+    },
+    "aws_iam_no_mfa": {
+        "why": "콘솔에 로그인할 수 있는 사용자가 MFA(2단계 인증) 없이 비밀번호만으로 접근합니다. 비밀번호가 "
+               "유출되면 바로 계정이 탈취됩니다.",
+        "how_to_fix": "1) 해당 사용자에게 MFA 기기(앱 OTP 등)를 등록하게 합니다.\n"
+                      "2) IAM 정책 조건(aws:MultiFactorAuthPresent)으로 MFA 없는 접근을 차단합니다.\n"
+                      "3) 가능하면 IAM Identity Center(SSO)로 통합해 MFA를 일괄 강제합니다.",
+    },
+    "aws_root_access_key": {
+        "why": "루트 계정에 액세스 키가 있습니다. 루트는 계정의 모든 권한을 갖기 때문에, 이 키가 유출되면 "
+               "청구·계정 삭제까지 포함해 무엇이든 가능해집니다(가장 위험).",
+        "how_to_fix": "1) 루트 액세스 키를 즉시 삭제합니다(콘솔 > 내 보안 자격 증명).\n"
+                      "2) 루트에는 MFA를 등록하고 평소에는 사용하지 않습니다.\n"
+                      "3) 일상 작업은 권한을 나눈 IAM 사용자·역할로 수행합니다.",
+    },
+    # ---- AWS 로깅/거버넌스 ----
+    "cloudtrail_missing": {
+        "why": "누가 언제 무엇을 했는지 기록하는 감사 로그(CloudTrail)가 없거나 일부 리전만 켜져 있습니다. "
+               "사고가 나도 원인 추적·법적 대응이 어렵습니다.",
+        "how_to_fix": "1) 모든 리전을 포함하는 CloudTrail 추적을 하나 만듭니다.\n"
+                      "2) 로그 파일 무결성 검증과 KMS 암호화를 켭니다.\n"
+                      "3) 조직 계정이면 Organization Trail로 전 계정을 한 번에 기록합니다.",
+    },
+    "vpc_flowlogs_missing": {
+        "why": "네트워크 통신 기록(VPC Flow Logs)이 없습니다. 침해 시 어떤 IP가 어디로 접속했는지 확인할 수 "
+               "없어 사고 분석이 힘듭니다.",
+        "how_to_fix": "1) 각 VPC에 Flow Logs를 켜고 대상(CloudWatch Logs 또는 S3)을 지정합니다.\n"
+                      "2) 로그를 정기적으로 검토하거나 이상 탐지에 연동합니다.",
+    },
+    "aws_config_recorder_off": {
+        "why": "리소스 설정 변경 이력을 기록하는 AWS Config가 꺼져 있습니다. 언제 누가 설정을 바꿔 보안 구멍이 "
+               "생겼는지 추적할 수 없습니다.",
+        "how_to_fix": "1) 전 리전에서 AWS Config 레코더를 활성화합니다.\n"
+                      "2) 규정 준수 규칙(Conformance Pack)을 적용해 위반 설정을 자동 감지합니다.",
+    },
+    # ---- Azure 네트워크/접근 ----
+    "nsg_open_sensitive_port": {
+        "why": "관리용 포트(SSH 22·RDP 3389 등)가 인터넷 전체에 열려 있습니다. 공격자가 자동 스캔으로 찾아 "
+               "무차별 대입·취약점 공격을 시도하므로, 서버 탈취로 이어지기 쉽습니다.",
+        "how_to_fix": "1) NSG 규칙의 원본(Source)을 회사 IP/서브넷으로 좁힙니다.\n"
+                      "2) 관리 접속은 Azure Bastion을 경유하도록 바꿉니다.\n"
+                      "3) 상시 개방 대신 JIT(Just-In-Time) VM 액세스로 필요할 때만 잠깐 엽니다.",
+    },
+    "nsg_open_all_ports": {
+        "why": "출발지도 전체(Any)이고 대상 포트도 전 범위로 열려 있습니다. 사실상 방화벽이 없는 것과 같아 "
+               "모든 서비스가 인터넷에 노출됩니다.",
+        "how_to_fix": "1) 이 규칙을 삭제하거나, 꼭 필요한 포트만 남깁니다.\n"
+                      "2) 원본 IP를 최소 범위로 제한합니다.\n"
+                      "3) 규칙 우선순위를 점검해 광범위 허용 규칙이 앞서지 않도록 합니다.",
+    },
+    "nsg_open_any": {
+        "why": "인바운드 규칙의 출발지가 인터넷 전체(Any)입니다. 열린 포트에 따라 위험이 커지므로 출발지 제한이 필요합니다.",
+        "how_to_fix": "1) 필요한 CIDR·서비스 태그로 출발지를 제한합니다.\n"
+                      "2) 공개가 필요한 서비스는 앞단에 WAF/Application Gateway를 둡니다.",
+    },
+    "nsg_outbound_any": {
+        "why": "내부에서 인터넷으로 나가는 통신이 전부 허용돼 있습니다. 서버가 감염되면 데이터를 외부로 빼내거나(유출) "
+               "공격 서버와 통신하는 것을 막지 못합니다.",
+        "how_to_fix": "1) 아웃바운드 목적지를 업무에 필요한 서비스 태그/IP로 제한합니다.\n"
+                      "2) 인터넷 접근이 필요한 경우 프록시/방화벽을 경유하게 합니다.",
+    },
+    # ---- Azure 암호화/노출 ----
+    "storage_https_disabled": {
+        "why": "저장소가 HTTP(평문) 전송을 허용합니다. 중간에서 통신을 가로채면(스니핑) 데이터·접근 키가 그대로 "
+               "노출될 수 있습니다.",
+        "how_to_fix": "1) 저장소 계정 > 구성에서 '보안 전송 필수(HTTPS only)'를 켭니다.\n"
+                      "2) 최소 TLS 버전을 1.2로 설정합니다.",
+    },
+    "storage_public_blob": {
+        "why": "익명 사용자가 인증 없이 Blob(파일)에 접근할 수 있습니다. 저장된 파일이 인터넷에 그대로 공개될 수 있어 "
+               "데이터 유출의 흔한 원인입니다.",
+        "how_to_fix": "1) 저장소 계정 > 구성에서 'Blob 공용 액세스 허용'을 사용 안 함으로 바꿉니다.\n"
+                      "2) 공유가 필요하면 만료 시간이 있는 SAS 토큰이나 Private Endpoint를 사용합니다.",
+    },
+    "storage_weak_tls": {
+        "why": "낮은 TLS 버전(1.0/1.1)을 허용합니다. 오래된 암호화는 알려진 공격에 취약해 통신 내용이 해독될 수 있습니다.",
+        "how_to_fix": "1) 저장소 계정의 최소 TLS 버전을 1.2 이상으로 설정합니다.\n"
+                      "2) 오래된 클라이언트가 있으면 업그레이드 후 적용합니다.",
+    },
+    "webapp_https_disabled": {
+        "why": "웹앱이 HTTP 평문 접속을 허용합니다. 로그인 정보·세션이 중간에서 탈취될 수 있습니다.",
+        "how_to_fix": "1) App Service > 구성에서 'HTTPS 전용'을 켭니다.\n"
+                      "2) 최소 TLS 1.2, HSTS 헤더 적용을 검토합니다.",
+    },
+    "disk_no_cmk": {
+        "why": "디스크가 플랫폼 기본 키로만 암호화됩니다. 데이터 자체는 암호화되어 있으나, 금융·규제 환경에서는 "
+               "키를 직접 관리(CMK)하도록 요구하는 경우가 많습니다.",
+        "how_to_fix": "1) 규제·내부정책상 CMK가 필요한지 확인합니다.\n"
+                      "2) 필요 시 디스크 암호화 세트(Disk Encryption Set)로 고객 관리 키(CMK)를 적용합니다.",
+    },
+    # ---- Azure Key Vault ----
+    "keyvault_softdelete_off": {
+        "why": "키 저장소의 소프트 삭제가 꺼져 있어, 키·비밀을 실수로 지우면 즉시 영구 삭제되어 복구할 수 없습니다.",
+        "how_to_fix": "1) Key Vault의 Soft-delete를 활성화합니다(기본 보존 90일).\n"
+                      "2) 함께 Purge Protection도 켜 강제 영구삭제를 막습니다.",
+    },
+    "keyvault_purge_off": {
+        "why": "삭제 대기 중인 키를 강제로 완전 삭제(purge)할 수 있는 상태입니다. 악의적/실수로 키가 사라지면 "
+               "암호화된 데이터를 영영 열 수 없게 됩니다.",
+        "how_to_fix": "1) Key Vault의 Purge Protection을 활성화합니다.\n"
+                      "2) 키 관리 권한을 최소한의 담당자에게만 부여합니다.",
+    },
+    # ---- Azure RBAC ----
+    "rbac_privileged_assignment": {
+        "why": "Owner처럼 광범위한 권한이 여러 사람에게 상시 부여돼 있습니다. 계정 하나만 탈취돼도 피해 범위가 "
+               "구독 전체로 커집니다.",
+        "how_to_fix": "1) 실제 업무에 맞는 최소 권한 역할(Reader/Contributor 등)로 낮춥니다.\n"
+                      "2) 관리 권한은 PIM으로 필요할 때만 승격받도록(JIT) 바꿉니다.\n"
+                      "3) 정기적으로 액세스 검토(Access Review)를 수행합니다.",
+    },
+    # ---- 공통 텍스트 폴백 ----
+    "mfa_ca_disabled": {
+        "why": "MFA(2단계 인증)를 강제하는 정책이 없거나 꺼져 있습니다. 비밀번호만으로 로그인하면 유출 시 바로 "
+               "계정이 탈취됩니다.",
+        "how_to_fix": "1) Conditional Access 정책으로 전 사용자·관리자에게 MFA를 강제합니다.\n"
+                      "2) 간단히 하려면 Security Defaults를 켭니다.\n"
+                      "3) 특권 계정은 승격 시 MFA 재인증을 필수화합니다.",
+    },
+    "diagnostic_missing": {
+        "why": "리소스의 진단 로그가 수집되지 않습니다. 문제가 생겨도 원인을 파악할 로그가 없어 대응이 늦어집니다.",
+        "how_to_fix": "1) 핵심 리소스의 진단 설정을 Log Analytics/Storage로 보냅니다.\n"
+                      "2) Azure Policy(Deploy if not exists)로 신규 리소스에 자동 적용합니다.",
+    },
+    "backup_failed": {
+        "why": "백업이 실패한 항목이 있습니다. 이 상태에서 장애·랜섬웨어가 발생하면 데이터를 복구하지 못할 수 있습니다.",
+        "how_to_fix": "1) 실패 원인(권한·용량·네트워크)을 확인해 조치 후 재실행합니다.\n"
+                      "2) 백업 성공/실패 알림을 구성해 실패를 즉시 인지합니다.\n"
+                      "3) 주기적으로 복구 테스트를 수행합니다.",
+    },
+    "backup_lrs": {
+        "why": "백업이 같은 지역에만 저장(LRS)됩니다. 지역 단위 재해가 발생하면 원본과 백업이 함께 손실될 수 있습니다.",
+        "how_to_fix": "1) 백업 스토리지를 지역 중복(GRS/RA-GRS)으로 전환합니다.\n"
+                      "2) 중요 데이터는 별도 리전 복제본을 검토합니다.",
+    },
+    "defender_active_alert": {
+        "why": "보안 위협 경고가 해결되지 않은 채 남아 있습니다. 실제 공격이 진행 중일 수 있어 방치하면 피해가 커집니다.",
+        "how_to_fix": "1) 각 경고의 심각도·영향을 확인해 우선순위대로 조치합니다.\n"
+                      "2) 조치 후 경고를 '해결' 처리해 현황을 명확히 유지합니다.\n"
+                      "3) Microsoft Sentinel과 연동해 상관분석·자동대응을 구성합니다.",
+    },
+    "assessment_unhealthy": {
+        "why": "취약점 평가에서 '비정상(Unhealthy)' 항목이 확인됐습니다. 알려진 약점이 방치되면 침해 통로가 됩니다.",
+        "how_to_fix": "1) Defender for Cloud 권고 사항을 확인해 하나씩 조치합니다.\n"
+                      "2) 보안 점수(Secure Score) 목표를 세워 지속 관리합니다.",
+    },
+    "patch_pending": {
+        "why": "중요(Critical/Security) 보안 패치가 적용되지 않았습니다. 미적용 취약점은 공격자의 주요 침투 경로입니다.",
+        "how_to_fix": "1) Azure Update Manager로 대상 시스템의 패치 현황을 확인합니다.\n"
+                      "2) 정기 패치 일정을 수립해 자동 적용합니다.\n"
+                      "3) 즉시 적용이 어려우면 임시 완화책(접근 제한)을 둡니다.",
+    },
+    "cve_detected": {
+        "why": "입력에서 알려진 취약점 식별자(CVE)가 발견됐습니다. CVE는 공개된 약점이라 공격 코드가 이미 도는 "
+               "경우가 많아 신속한 대응이 필요합니다.",
+        "how_to_fix": "1) 각 CVE의 심각도(CVSS)와 영향 범위를 확인합니다.\n"
+                      "2) 패치가 있으면 우선순위대로 적용합니다.\n"
+                      "3) 패치가 없으면 WAF 규칙·네트워크 격리 등 완화책을 적용합니다.",
+    },
+}
+
+
 def _finding(code: str, issue_type: str, severity: Severity, title: str,
              description: str, *, platform: str = "azure", evidence: str = "",
              resource: str = "", recommendation: str = "",
-             bad_example: str = "", good_example: str = "") -> Finding:
+             bad_example: str = "", good_example: str = "",
+             why: str = "", how_to_fix: str = "") -> Finding:
     kb = control_for(code, platform)
     # 이슈 유형별 맞춤 예시가 있으면 우선 사용, 없으면 통제항목 기본값.
     ex = _EXAMPLES.get(issue_type, {})
+    expl = _EXPLAIN.get(issue_type, {})
     return Finding(
         control_code=code,
         control_domain=kb.get("domain", ""),
@@ -193,11 +418,13 @@ def _finding(code: str, issue_type: str, severity: Severity, title: str,
         title=title,
         description=description or kb.get("criteria", ""),
         recommendation=recommendation or kb.get("fix", ""),
-        evidence=(evidence or "")[:300],
+        evidence=(evidence or "")[:600],
         resource=resource or "",
         platform=platform,
         bad_example=bad_example or ex.get("bad", "") or kb.get("bad_example", ""),
         good_example=good_example or ex.get("good", "") or kb.get("good_example", ""),
+        why=why or expl.get("why", ""),
+        how_to_fix=how_to_fix or expl.get("how_to_fix", ""),
     )
 
 
@@ -356,11 +583,13 @@ def _sql_finding(key: str, severity: Severity, findings: list[Finding],
         title=f"{meta.get('title', key)}: {name or '(이름없음)'}",
         description=desc,
         recommendation=meta.get("fix", ""),
-        evidence=(flat or "")[:300],
+        evidence=(flat or "")[:600],
         resource=name,
         platform="azure",
         bad_example=meta.get("bad_example", ""),
         good_example=meta.get("good_example", ""),
+        why=meta.get("why", ""),
+        how_to_fix=meta.get("how_to_fix", ""),
     ))
 
 
@@ -816,7 +1045,7 @@ def _check_object(d: dict, findings: list[Finding], seen: set, hint: str | None)
 # ===========================================================================
 # 원시 텍스트(정규식) 폴백 검사
 # ===========================================================================
-def _snippet(text: str, *patterns: str, width: int = 90) -> str:
+def _snippet(text: str, *patterns: str, width: int = 220) -> str:
     """입력 원문에서 패턴이 매칭된 위치 주변 텍스트를 잘라 근거로 반환.
 
     여러 패턴 중 매칭되는 첫 부분을 찾아 앞뒤 문맥과 함께 돌려준다.
@@ -827,7 +1056,7 @@ def _snippet(text: str, *patterns: str, width: int = 90) -> str:
         if not m:
             continue
         # 매칭 텍스트가 근거의 앞쪽에 오도록 앞 문맥은 조금만, 뒤 문맥은 넉넉히.
-        start = max(0, m.start() - 12)
+        start = max(0, m.start() - 20)
         end = min(len(text), m.end() + width)
         frag = text[start:end].strip()
         # 여러 줄이면 한 줄로 압축(가독성).

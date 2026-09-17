@@ -55,6 +55,8 @@ class Finding:
         platform: 대상 클라우드 플랫폼("aws" | "azure").
         bad_example: 위반(취약) 설정 예시.
         good_example: 개선(안전) 설정 예시.
+        why: 왜 문제인지(위험)를 초보 담당자도 이해하도록 쉽게 설명.
+        how_to_fix: 해결 방안을 단계별(1,2,3…)로 안내하는 상세 설명.
     """
 
     control_code: str
@@ -69,6 +71,8 @@ class Finding:
     platform: str = "azure"
     bad_example: str = ""
     good_example: str = ""
+    why: str = ""
+    how_to_fix: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
