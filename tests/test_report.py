@@ -117,9 +117,12 @@ class TestXlsx(unittest.TestCase):
         names = zf.namelist()
         self.assertIn("[Content_Types].xml", names)
         self.assertIn("xl/workbook.xml", names)
-        # 워크시트 2개(요약/상세)
-        sheets = [n for n in names if n.startswith("xl/worksheets/")]
-        self.assertEqual(len(sheets), 2)
+        # 워크시트 3개(요약/상세/통계) — _rels 제외
+        sheets = [n for n in names
+                  if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+        self.assertEqual(len(sheets), 3)
+        # 발표용 차트 포함
+        self.assertIn("xl/charts/chart1.xml", names)
 
     def test_all_xml_parseable(self):
         import io

@@ -197,6 +197,44 @@ _PLAT_COLOR = {"aws": "#ff9900", "azure": "#0078d4"}
 _BAR_COLORS = ["#2980b9", "#ff9900", "#27ae60", "#8e44ad", "#c9a227", "#c0392b", "#16a2b8", "#7f8c8d"]
 
 
+def _gauge_color(score):
+    if score >= 90:
+        return "#27ae60"
+    if score >= 80:
+        return "#7cb342"
+    if score >= 70:
+        return "#c9a227"
+    if score >= 60:
+        return "#e67e22"
+    return "#c0392b"
+
+
+def _svg_gauge(score, grade):
+    """인쇄용 반원형 점수 게이지 SVG(라이트 테마)."""
+    import math
+    score = max(0, min(100, int(score or 0)))
+    cx, cy, r = 100, 100, 82
+
+    def pt(deg):
+        a = (180 - deg) * math.pi / 180
+        return (cx + r * math.cos(a), cy - r * math.sin(a))
+
+    arc = 180 * score / 100
+    s, e, full = pt(0), pt(arc), pt(180)
+    large = 1 if arc > 180 else 0
+    col = _gauge_color(score)
+    return (
+        f'<svg width="200" height="118" viewBox="0 0 200 118">'
+        f'<path d="M {s[0]:.1f} {s[1]:.1f} A {r} {r} 0 0 1 {full[0]:.1f} {full[1]:.1f}" '
+        f'fill="none" stroke="#e5e5e5" stroke-width="14" stroke-linecap="round"/>'
+        f'<path d="M {s[0]:.1f} {s[1]:.1f} A {r} {r} 0 {large} 1 {e[0]:.1f} {e[1]:.1f}" '
+        f'fill="none" stroke="{col}" stroke-width="14" stroke-linecap="round"/>'
+        f'<text x="{cx}" y="{cy - 14}" text-anchor="middle" font-size="40" font-weight="800" fill="{col}">{score}</text>'
+        f'<text x="{cx}" y="{cy + 6}" text-anchor="middle" font-size="13" fill="#777">/ 100 · 등급 {_esc(grade)}</text>'
+        f'</svg>'
+    )
+
+
 def _svg_donut(items, size=130):
     """인쇄용 SVG 도넛 차트(외부 라이브러리 불필요)."""
     total = sum(x["value"] for x in items)
@@ -342,6 +380,9 @@ def format_html(report: AuditReport) -> str:
     )
     plat_meta = f" · 플랫폼: {_esc(psum)}" if psum else ""
 
+    # 점수 게이지
+    gauge_svg = _svg_gauge(d["score"], d["grade"])
+
     # 발표용 통계 차트
     from .engine import build_statistics
     stats_html = _stats_html(d.get("statistics") or build_statistics(d))
@@ -378,7 +419,7 @@ def format_html(report: AuditReport) -> str:
   body{{ font-family:"Malgun Gothic","맑은 고딕",system-ui,sans-serif; color:#1a1a1a; margin:32px; font-size:13px; line-height:1.55; }}
   h1{{ font-size:20px; margin:0 0 4px; }}
   .meta{{ color:#555; font-size:12px; margin-bottom:2px; }}
-  .scorebox{{ display:inline-block; border:2px solid #333; border-radius:8px; padding:8px 16px; margin:10px 0; }}
+  .scorebox{{ display:inline-block; margin:6px 0; }}
   .score{{ font-size:26px; font-weight:800; }}
   h2{{ font-size:15px; border-bottom:2px solid #333; padding-bottom:3px; margin:22px 0 6px; }}
   .plat{{ color:#fff; font-size:11px; font-weight:700; padding:1px 8px; border-radius:4px; margin-right:8px; vertical-align:middle; }}
@@ -430,7 +471,7 @@ def format_html(report: AuditReport) -> str:
   </div>
   <h1>🛡️ 클라우드 정책 오프라인 보안검토 리포트</h1>
   <div class="meta">기준: ISMS-P 클라우드 인프라 통제항목 (AWS/Azure) · 오프라인 규칙 기반 자동 검토</div>
-  <div class="scorebox"><span class="score">{d['score']}</span> / 100점 &nbsp; 등급 <b>{_esc(d['grade'])}</b></div>
+  <div class="scorebox">{gauge_svg}</div>
   <div class="meta">입력형식: {_esc(d['input_kind'])} · 파싱 리소스 {d['parsed_resources']}개 · 발견 이슈 {d['total_findings']}건 ({_esc(csum)}){plat_meta}</div>
   {stats_html}
   {summary_html}
@@ -485,6 +526,33 @@ def _sheet_xml(rows: list[list], freeze_header: bool = True) -> str:
     return "".join(out)
 
 
+def _drawing_xml(chart_rid_map) -> str:
+    """차트를 시트에 배치하는 drawing XML. chart_rid_map: [(rId, from_col, from_row, to_col, to_row)]."""
+    anchors = []
+    for rid, c1, r1, c2, r2 in chart_rid_map:
+        anchors.append(
+            '<xdr:twoCellAnchor>'
+            f'<xdr:from><xdr:col>{c1}</xdr:col><xdr:colOff>0</xdr:colOff>'
+            f'<xdr:row>{r1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>'
+            f'<xdr:to><xdr:col>{c2}</xdr:col><xdr:colOff>0</xdr:colOff>'
+            f'<xdr:row>{r2}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>'
+            '<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr>'
+            f'<xdr:cNvPr id="{c1+2}" name="Chart {rid}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>'
+            '<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>'
+            '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">'
+            f'<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" '
+            f'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="{rid}"/>'
+            '</a:graphicData></a:graphic></xdr:graphicFrame>'
+            '<xdr:clientData/></xdr:twoCellAnchor>'
+        )
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        + "".join(anchors) + "</xdr:wsDr>"
+    )
+
+
 def format_xlsx(report: AuditReport) -> bytes:
     """검토 결과를 진짜 엑셀(.xlsx) 바이트로 생성.
 
@@ -517,6 +585,10 @@ def format_xlsx(report: AuditReport) -> bytes:
         row["platform"] = _plat_label(row.get("platform", ""))
         detail_rows.append([str(row.get(key, "")) for key, _ in _CSV_COLUMNS])
 
+    # --- 통계 시트 데이터(차트용, 숫자 셀) ---
+    from .engine import build_statistics
+    stats = build_statistics(report.to_dict())
+
     # --- xlsx(zip) 구성 ---
     content_types = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -526,6 +598,10 @@ def format_xlsx(report: AuditReport) -> bytes:
         '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
         '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
         '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>'
+        '<Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>'
+        '<Override PartName="/xl/charts/chart2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>'
         "</Types>"
     )
     root_rels = (
@@ -541,6 +617,7 @@ def format_xlsx(report: AuditReport) -> bytes:
         '<sheets>'
         '<sheet name="요약" sheetId="1" r:id="rId1"/>'
         '<sheet name="상세" sheetId="2" r:id="rId2"/>'
+        '<sheet name="통계(차트)" sheetId="3" r:id="rId3"/>'
         "</sheets></workbook>"
     )
     workbook_rels = (
@@ -548,6 +625,85 @@ def format_xlsx(report: AuditReport) -> bytes:
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
         '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>'
+        "</Relationships>"
+    )
+
+    # --- 통계 시트(sheet3): 심각도(A:B) + 영역(D:E) 숫자 데이터 + 차트 2개 ---
+    sev_data = [(x["label"], x["value"]) for x in stats["severity"]]
+    dom_data = [(x["label"], x["value"]) for x in stats["domain"]]
+    sev_n = len(sev_data)
+    dom_n = len(dom_data)
+
+    def _stat_sheet_with_charts():
+        out = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+               '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+               'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+               "<sheetData>"]
+        # 헤더 행
+        out.append('<row r="1">'
+                   '<c r="A1" t="inlineStr"><is><t>심각도</t></is></c>'
+                   '<c r="B1" t="inlineStr"><is><t>건수</t></is></c>'
+                   '<c r="D1" t="inlineStr"><is><t>ISMS-P 영역</t></is></c>'
+                   '<c r="E1" t="inlineStr"><is><t>건수</t></is></c></row>')
+        maxlen = max(sev_n, dom_n, 1)
+        for i in range(maxlen):
+            r = i + 2
+            cells = []
+            if i < sev_n:
+                cells.append(f'<c r="A{r}" t="inlineStr"><is><t xml:space="preserve">{_xl_esc(sev_data[i][0])}</t></is></c>'
+                             f'<c r="B{r}"><v>{int(sev_data[i][1])}</v></c>')
+            if i < dom_n:
+                cells.append(f'<c r="D{r}" t="inlineStr"><is><t xml:space="preserve">{_xl_esc(dom_data[i][0])}</t></is></c>'
+                             f'<c r="E{r}"><v>{int(dom_data[i][1])}</v></c>')
+            out.append(f'<row r="{r}">{"".join(cells)}</row>')
+        out.append("</sheetData>")
+        out.append('<drawing r:id="rId1"/>')
+        out.append("</worksheet>")
+        return "".join(out)
+
+    # 심각도 차트(A2:A{n}, B2:B{n}), 영역 차트(D2:D{n}, E2:E{n})
+    def _bar_chart_xml2(title, catcol, valcol, n, color):
+        last = n + 1
+        sheet = "'통계(차트)'"
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<c:chart>'
+            f'<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>{_xl_esc(title)}</a:t></a:r></a:p></c:rich></c:tx>'
+            '<c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>'
+            '<c:plotArea><c:layout/>'
+            '<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>'
+            '<c:ser><c:idx val="0"/><c:order val="0"/>'
+            f'<c:spPr><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></c:spPr>'
+            f'<c:cat><c:strRef><c:f>{sheet}!${catcol}$2:${catcol}${last}</c:f></c:strRef></c:cat>'
+            f'<c:val><c:numRef><c:f>{sheet}!${valcol}$2:${valcol}${last}</c:f></c:numRef></c:val>'
+            '</c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart>'
+            '<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling>'
+            '<c:delete val="0"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>'
+            '<c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling>'
+            '<c:delete val="0"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>'
+            '</c:plotArea><c:plotVisOnly val="1"/></c:chart></c:chartSpace>'
+        )
+
+    chart1 = _bar_chart_xml2("심각도별 이슈 건수", "A", "B", sev_n, "C0392B")
+    chart2 = _bar_chart_xml2("ISMS-P 영역별 이슈 건수", "D", "E", dom_n, "2980B9")
+
+    # drawing: 차트1(G1~N15), 차트2(G16~N30)
+    drawing = _drawing_xml([("rId1", 6, 0, 13, 15), ("rId2", 6, 15, 13, 30)])
+    drawing_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/>'
+        "</Relationships>"
+    )
+    sheet3_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>'
         "</Relationships>"
     )
 
@@ -559,4 +715,10 @@ def format_xlsx(report: AuditReport) -> bytes:
         z.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
         z.writestr("xl/worksheets/sheet1.xml", _sheet_xml(summary_rows, freeze_header=False))
         z.writestr("xl/worksheets/sheet2.xml", _sheet_xml(detail_rows, freeze_header=True))
+        z.writestr("xl/worksheets/sheet3.xml", _stat_sheet_with_charts())
+        z.writestr("xl/worksheets/_rels/sheet3.xml.rels", sheet3_rels)
+        z.writestr("xl/drawings/drawing1.xml", drawing)
+        z.writestr("xl/drawings/_rels/drawing1.xml.rels", drawing_rels)
+        z.writestr("xl/charts/chart1.xml", chart1)
+        z.writestr("xl/charts/chart2.xml", chart2)
     return buf.getvalue()

@@ -81,6 +81,7 @@ INDEX_HTML = """<!DOCTYPE html>
   input[type=file]{ color:var(--muted); font-size:12px; }
   .scorecard{ display:flex; align-items:center; gap:18px; }
   .score{ font-size:44px; font-weight:800; line-height:1; }
+  .gauge{ flex:0 0 auto; }
   .grade-A,.grade-B{ color:#37d67a; } .grade-C{ color:var(--med); } .grade-D,.grade-F{ color:var(--crit); }
   .counts span{ display:inline-block; margin-right:10px; font-size:13px; }
   .sec{ font-size:14px; margin:18px 0 8px; color:var(--accent); border-left:3px solid var(--accent); padding-left:8px; }
@@ -190,7 +191,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
   <div class="card" id="result-card" style="display:none">
     <div class="scorecard">
-      <div class="score" id="score">-</div>
+      <div id="gauge" class="gauge"></div>
       <div>
         <div id="grade-line" style="font-size:15px;font-weight:700"></div>
         <div class="counts" id="counts"></div>
@@ -429,7 +430,7 @@ function updateFilterButtons(){
 function render(r){
   LAST_REPORT=r; PLAT_FILTER='all';
   document.getElementById('result-card').style.display='block';
-  var sc=document.getElementById('score'); sc.textContent=r.score; sc.className='score grade-'+r.grade;
+  var g=document.getElementById('gauge'); if(g) g.innerHTML=_gaugeSVG(r.score, r.grade);
   document.getElementById('grade-line').textContent='등급 '+r.grade+'  /  100점';
   var c=r.severity_counts||{};
   var order=['CRITICAL','HIGH','MEDIUM','LOW','INFO'];
@@ -459,6 +460,32 @@ function render(r){
 // ── 발표용 통계 차트(순수 SVG, 외부 라이브러리 불필요) ──
 var _SEVCOLOR={CRITICAL:'#e05563',HIGH:'#ff9a3d',MEDIUM:'#ffd166',LOW:'#4da3ff',INFO:'#8a9084'};
 var _BARCOLORS=['#4da3ff','#ff9900','#37d67a','#c39bff','#ffd166','#e05563','#5bc0de','#a0a0a0'];
+function _gaugeColor(score){
+  if(score>=90) return '#37d67a';   // A
+  if(score>=80) return '#8fd14f';   // B
+  if(score>=70) return '#ffd166';   // C
+  if(score>=60) return '#ff9a3d';   // D
+  return '#e05563';                 // F
+}
+function _gaugeSVG(score, grade){
+  // 반원형 게이지(180도). 0점=왼쪽, 100점=오른쪽.
+  score = Math.max(0, Math.min(100, score||0));
+  var w=200, h=118, cx=100, cy=100, r=82;
+  function pt(deg){ var a=(180-deg)*Math.PI/180; return [cx+r*Math.cos(a), cy-r*Math.sin(a)]; }
+  var arc=180*score/100;
+  var s=pt(0), e=pt(arc), full=pt(180);
+  var large=arc>180?1:0;
+  var col=_gaugeColor(score);
+  return '<svg width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">'+
+    // 배경 트랙
+    '<path d="M '+s[0].toFixed(1)+' '+s[1].toFixed(1)+' A '+r+' '+r+' 0 0 1 '+full[0].toFixed(1)+' '+full[1].toFixed(1)+'" fill="none" stroke="#22303f" stroke-width="14" stroke-linecap="round"/>'+
+    // 점수 호
+    '<path d="M '+s[0].toFixed(1)+' '+s[1].toFixed(1)+' A '+r+' '+r+' 0 '+large+' 1 '+e[0].toFixed(1)+' '+e[1].toFixed(1)+'" fill="none" stroke="'+col+'" stroke-width="14" stroke-linecap="round"/>'+
+    // 점수·등급 텍스트
+    '<text x="'+cx+'" y="'+(cy-14)+'" text-anchor="middle" font-size="40" font-weight="800" fill="'+col+'">'+score+'</text>'+
+    '<text x="'+cx+'" y="'+(cy+6)+'" text-anchor="middle" font-size="13" fill="#8a9084">/ 100 · 등급 '+esc(grade||'')+'</text>'+
+    '</svg>';
+}
 function _donutSVG(items, size){
   var total=items.reduce(function(s,x){return s+x.value;},0);
   if(!total) return '';

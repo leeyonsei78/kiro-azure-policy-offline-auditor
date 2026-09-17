@@ -85,6 +85,42 @@ class HtmlChartTest(unittest.TestCase):
         h = format_html(analyze(""))
         self.assertNotIn("📊 통계 요약", h)
 
+    def test_html_has_score_gauge(self):
+        h = format_html(analyze(json.dumps(_SAMPLE)))
+        # 반원형 게이지 SVG(200x118)
+        self.assertIn('viewBox="0 0 200 118"', h)
+
+
+class XlsxChartTest(unittest.TestCase):
+    def test_xlsx_contains_charts(self):
+        import io
+        import zipfile
+        import xml.dom.minidom as minidom
+        from auditor.report import format_xlsx
+        data = format_xlsx(analyze(json.dumps(_SAMPLE)))
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        self.assertIsNone(zf.testzip())
+        names = zf.namelist()
+        # 통계 시트 + 차트 + 드로잉 포함
+        self.assertIn("xl/worksheets/sheet3.xml", names)
+        self.assertIn("xl/charts/chart1.xml", names)
+        self.assertIn("xl/charts/chart2.xml", names)
+        self.assertIn("xl/drawings/drawing1.xml", names)
+        # 모든 XML 파싱 가능(구조 유효)
+        for n in names:
+            if n.endswith(".xml") or n.endswith(".rels"):
+                minidom.parseString(zf.read(n))
+
+    def test_xlsx_chart_references_data(self):
+        import io
+        import zipfile
+        from auditor.report import format_xlsx
+        zf = zipfile.ZipFile(io.BytesIO(format_xlsx(analyze(json.dumps(_SAMPLE)))))
+        chart1 = zf.read("xl/charts/chart1.xml").decode()
+        # 심각도 데이터(통계 시트 B열)를 참조
+        self.assertIn("barChart", chart1)
+        self.assertIn("$B$2", chart1)
+
 
 if __name__ == "__main__":
     unittest.main()
