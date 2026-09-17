@@ -31,10 +31,160 @@ _SENSITIVE_PORTS = {
 _MGMT_PORTS = {"22", "3389", "445", "23"}
 
 
+# 이슈 유형별 위반(bad)·개선(good) 예시 카탈로그.
+# 화면/리포트에서 "✗ 위반 예시 / ✓ 개선 예시"로 표시되어 조치 방향을 구체적으로 안내한다.
+_EXAMPLES: dict[str, dict[str, str]] = {
+    # ---- AWS 네트워크/접근 ----
+    "aws_sg_open_sensitive_port": {
+        "bad": "IpPermissions: FromPort=22, IpRanges=[{CidrIp: 0.0.0.0/0}]  (전체 인터넷에 SSH 개방)",
+        "good": "IpRanges=[{CidrIp: 10.0.0.0/16}] 또는 관리자 IP/Bastion·SSM Session Manager 경유로 제한",
+    },
+    "aws_sg_open_any": {
+        "bad": "IpRanges=[{CidrIp: 0.0.0.0/0}] 로 모든 출발지 허용",
+        "good": "필요한 CIDR·보안그룹 참조로 출발지를 최소 범위로 제한",
+    },
+    "aws_rds_public": {
+        "bad": "PubliclyAccessible: true  (RDS 엔드포인트가 인터넷에 노출)",
+        "good": "PubliclyAccessible: false + 프라이빗 서브넷 배치 + 보안그룹으로 접근 출발지 제한",
+    },
+    # ---- AWS 암호화/노출 ----
+    "aws_s3_public_block_off": {
+        "bad": "PublicAccessBlockConfiguration: {BlockPublicAcls: false, RestrictPublicBuckets: false}",
+        "good": "계정·버킷 레벨 Block Public Access 4개 옵션을 모두 true로 설정",
+    },
+    "aws_s3_public_policy": {
+        "bad": '버킷 정책 Statement: {"Effect":"Allow","Principal":"*","Action":"s3:GetObject"}',
+        "good": '특정 주체로 제한: {"Principal":{"AWS":"arn:aws:iam::111122223333:role/app"}} 또는 CloudFront OAC 사용',
+    },
+    "aws_s3_no_encryption": {
+        "bad": "버킷 기본 암호화(ServerSideEncryptionConfiguration) 없음",
+        "good": "기본 암호화 SSE-KMS 적용 (aws s3api put-bucket-encryption ... aws:kms)",
+    },
+    "aws_ebs_snapshot_public": {
+        "bad": "CreateVolumePermission: [{Group: all}]  (누구나 스냅샷으로 볼륨 복원 가능)",
+        "good": "공개 공유 제거, 필요 시 특정 계정에만 공유 (UserId 지정)",
+    },
+    # ---- AWS IAM/자격증명 ----
+    "aws_iam_wildcard_admin": {
+        "bad": '{"Effect":"Allow","Action":"*","Resource":"*"}  (전권 부여)',
+        "good": "업무별 최소권한 정책으로 분리 (예: 특정 S3 버킷·특정 액션만 Allow)",
+    },
+    "aws_iam_no_mfa": {
+        "bad": "콘솔 접근 가능 IAM 사용자 mfa_active=false",
+        "good": "MFA 등록 + IAM 정책 조건 aws:MultiFactorAuthPresent=true 강제",
+    },
+    "aws_root_access_key": {
+        "bad": "root 계정 access_key_1_active=true  (루트 액세스 키 상시 존재)",
+        "good": "루트 액세스 키 삭제, 루트는 MFA 등록 후 비상시에만 사용, 일상 작업은 IAM Role",
+    },
+    # ---- AWS 로깅/거버넌스 ----
+    "cloudtrail_missing": {
+        "bad": "다중 리전 CloudTrail 없음 또는 IsMultiRegionTrail=false",
+        "good": "조직 전체 다중 리전 CloudTrail + 로그 파일 검증(LogFileValidationEnabled)+KMS 암호화",
+    },
+    "vpc_flowlogs_missing": {
+        "bad": "VPC Flow Logs 미구성 또는 FlowLogStatus=INACTIVE",
+        "good": "모든 VPC에 Flow Logs 활성화(대상: CloudWatch Logs/S3) 후 이상 트래픽 모니터링",
+    },
+    "aws_config_recorder_off": {
+        "bad": "ConfigurationRecorder recording=false  (구성 변경 미기록)",
+        "good": "전 리전 AWS Config 레코더 활성화 + 규정 준수 규칙(Conformance Pack) 적용",
+    },
+    # ---- Azure 네트워크/접근 ----
+    "nsg_open_sensitive_port": {
+        "bad": "sourceAddressPrefix='*', destinationPortRange='3389', access='Allow', direction='Inbound'",
+        "good": "출발지를 회사 IP/서브넷으로 제한하거나 Azure Bastion 경유, JIT VM 액세스 사용",
+    },
+    "nsg_open_all_ports": {
+        "bad": "sourceAddressPrefix='0.0.0.0/0', destinationPortRange='*'  (모든 포트 전체 개방)",
+        "good": "필요한 포트만 명시하고 출발지 IP를 최소 범위로 제한",
+    },
+    "nsg_open_any": {
+        "bad": "sourceAddressPrefix='Internet' 인바운드 허용",
+        "good": "필요한 CIDR/서비스 태그로 출발지 제한",
+    },
+    "nsg_outbound_any": {
+        "bad": "direction='Outbound', destinationAddressPrefix='*' 전체 허용",
+        "good": "아웃바운드 목적지를 필요한 서비스 태그/IP로 제한(데이터 유출 통제)",
+    },
+    # ---- Azure 암호화/노출 ----
+    "storage_https_disabled": {
+        "bad": "supportsHttpsTrafficOnly: false  (HTTP 평문 전송 허용)",
+        "good": "supportsHttpsTrafficOnly: true + minimumTlsVersion: TLS1_2",
+    },
+    "storage_public_blob": {
+        "bad": "allowBlobPublicAccess: true  (익명 Blob 접근 허용)",
+        "good": "allowBlobPublicAccess: false, 필요한 공유는 SAS 토큰·Private Endpoint로 대체",
+    },
+    "storage_weak_tls": {
+        "bad": "minimumTlsVersion: TLS1_0",
+        "good": "minimumTlsVersion: TLS1_2 이상",
+    },
+    "webapp_https_disabled": {
+        "bad": "httpsOnly: false  (웹앱이 HTTP 평문 접근 허용)",
+        "good": "httpsOnly: true + minTlsVersion 1.2, HSTS 적용",
+    },
+    "disk_no_cmk": {
+        "bad": "encryption.type: EncryptionAtRestWithPlatformKey  (플랫폼 관리 키만)",
+        "good": "규제 요건 시 Disk Encryption Set으로 고객 관리 키(CMK) 적용",
+    },
+    # ---- Azure Key Vault ----
+    "keyvault_softdelete_off": {
+        "bad": "enableSoftDelete: false",
+        "good": "enableSoftDelete: true (90일 보존)",
+    },
+    "keyvault_purge_off": {
+        "bad": "enablePurgeProtection: false",
+        "good": "enablePurgeProtection: true (강제 영구삭제 차단)",
+    },
+    # ---- Azure RBAC/거버넌스 ----
+    "rbac_privileged_assignment": {
+        "bad": "roleDefinitionName='Owner' 가 다수 사용자에게 상시 부여",
+        "good": "Reader/Contributor 등 최소권한 역할 + PIM으로 필요시(JIT) 승격",
+    },
+    # ---- 공통 텍스트 폴백 ----
+    "mfa_ca_disabled": {
+        "bad": "Conditional Access policy state: disabled (MFA 강제 없음)",
+        "good": "전 사용자·관리자 MFA 강제 CA 정책 활성화(state: enabled) 또는 Security Defaults",
+    },
+    "diagnostic_missing": {
+        "bad": "diagnostic-settings list 결과: [] (진단 설정 없음)",
+        "good": "핵심 리소스 진단 설정을 Log Analytics/Storage로 연동, Azure Policy로 강제",
+    },
+    "backup_failed": {
+        "bad": "lastBackupStatus: Failed",
+        "good": "백업 실패 원인 조치 후 재실행, 백업 성공/실패 알림(Monitor) 구성",
+    },
+    "backup_lrs": {
+        "bad": "storageType: LocallyRedundant (LRS)",
+        "good": "GRS/RA-GRS 등 지역 중복 스토리지로 전환",
+    },
+    "defender_active_alert": {
+        "bad": "Defender for Cloud alert status: Active (미해결)",
+        "good": "경고 분류·조치 후 해결 처리, Sentinel 연동으로 상관분석·자동대응",
+    },
+    "assessment_unhealthy": {
+        "bad": "assessment status.code: Unhealthy",
+        "good": "권고 조치 반영으로 Healthy 전환, Secure Score 목표 관리",
+    },
+    "patch_pending": {
+        "bad": "classificationsToInclude=[Critical,Security] 패치 미적용",
+        "good": "Azure Update Manager로 정기 패치 일정 수립·자동 적용",
+    },
+    "cve_detected": {
+        "bad": "CVE-2021-44228 등 알려진 취약점 식별자 존재",
+        "good": "영향 자산 패치 적용, 패치 불가 시 WAF 규칙·네트워크 격리 등 완화",
+    },
+}
+
+
 def _finding(code: str, issue_type: str, severity: Severity, title: str,
              description: str, *, platform: str = "azure", evidence: str = "",
-             resource: str = "", recommendation: str = "") -> Finding:
+             resource: str = "", recommendation: str = "",
+             bad_example: str = "", good_example: str = "") -> Finding:
     kb = control_for(code, platform)
+    # 이슈 유형별 맞춤 예시가 있으면 우선 사용, 없으면 통제항목 기본값.
+    ex = _EXAMPLES.get(issue_type, {})
     return Finding(
         control_code=code,
         control_domain=kb.get("domain", ""),
@@ -46,8 +196,8 @@ def _finding(code: str, issue_type: str, severity: Severity, title: str,
         evidence=(evidence or "")[:300],
         resource=resource or "",
         platform=platform,
-        bad_example=kb.get("bad_example", ""),
-        good_example=kb.get("good_example", ""),
+        bad_example=bad_example or ex.get("bad", "") or kb.get("bad_example", ""),
+        good_example=good_example or ex.get("good", "") or kb.get("good_example", ""),
     )
 
 
@@ -666,71 +816,110 @@ def _check_object(d: dict, findings: list[Finding], seen: set, hint: str | None)
 # ===========================================================================
 # 원시 텍스트(정규식) 폴백 검사
 # ===========================================================================
+def _snippet(text: str, *patterns: str, width: int = 90) -> str:
+    """입력 원문에서 패턴이 매칭된 위치 주변 텍스트를 잘라 근거로 반환.
+
+    여러 패턴 중 매칭되는 첫 부분을 찾아 앞뒤 문맥과 함께 돌려준다.
+    매칭이 없으면 빈 문자열. 사용자에게 '어떤 텍스트로 판단했는지' 보여주기 위함.
+    """
+    for pat in patterns:
+        m = re.search(pat, text, re.I)
+        if not m:
+            continue
+        # 매칭 텍스트가 근거의 앞쪽에 오도록 앞 문맥은 조금만, 뒤 문맥은 넉넉히.
+        start = max(0, m.start() - 12)
+        end = min(len(text), m.end() + width)
+        frag = text[start:end].strip()
+        # 여러 줄이면 한 줄로 압축(가독성).
+        frag = re.sub(r"\s+", " ", frag)
+        prefix = "…" if start > 0 else ""
+        suffix = "…" if end < len(text) else ""
+        return f"{prefix}{frag}{suffix}"
+    return ""
+
+
 def _check_raw_text(text: str, findings: list[Finding], existing_types: set, hint: str) -> None:
     """JSON 구조로 못 잡은 부분을 키워드로 보완. 이미 잡힌 유형은 중복 억제."""
     low = text.lower()
     plat = hint or "azure"
 
-    def add(code, itype, sev, title, desc, rec="", platform=None):
+    def add(code, itype, sev, title, desc, rec="", platform=None, evidence=""):
         if itype in existing_types:
             return
         existing_types.add(itype)
+        # evidence: 입력에서 실제로 매칭된 근거 텍스트. 없으면 안내 문구로 폴백.
+        ev = evidence.strip() if evidence else ""
+        if not ev:
+            ev = "(텍스트 패턴 감지 — 입력에서 해당 키워드 확인)"
+        else:
+            ev = f"[근거 텍스트] {ev}"
         findings.append(_finding(code, itype, sev, title, desc, recommendation=rec,
-                                 platform=platform or plat, evidence="(텍스트 패턴 감지)"))
+                                 platform=platform or plat, evidence=ev))
 
     # MFA / Conditional Access (Azure)
     if re.search(r"conditional\s*access|conditionalaccess", low):
         if (re.search(r'"state"\s*:\s*"disabled"|disabled', low) and "mfa" in low) or "다단계" in text:
             add("2.5.3", "mfa_ca_disabled", Severity.HIGH,
                 "MFA 강제 Conditional Access 미흡",
-                "Conditional Access 정책이 Disabled이거나 MFA 강제가 확인되지 않습니다.", platform="azure")
+                "Conditional Access 정책이 Disabled이거나 MFA 강제가 확인되지 않습니다.", platform="azure",
+                evidence=_snippet(text, r"conditional\s*access", r"conditionalaccess", r"다단계"))
     # 진단 설정 부재
     if re.search(r"diagnostic[- ]?settings", low) and re.search(r"\[\s*\]|no diagnostic|없음|not configured", low):
         add("2.9.4", "diagnostic_missing", Severity.MEDIUM,
             "진단 설정(Diagnostic Settings) 미구성",
-            "핵심 리소스에 진단 설정이 구성되지 않아 로그가 수집되지 않을 수 있습니다.")
+            "핵심 리소스에 진단 설정이 구성되지 않아 로그가 수집되지 않을 수 있습니다.",
+            evidence=_snippet(text, r"diagnostic[- ]?settings"))
     # CloudTrail 미구성 (AWS)
     if re.search(r"cloudtrail", low) and re.search(r"\[\s*\]|no trail|not configured|ismultiregion.{0,6}false|미구성", low):
         add("2.9.4", "cloudtrail_missing", Severity.HIGH,
             "CloudTrail 추적 미구성/부분 구성",
-            "다중 리전 CloudTrail 추적이 구성되지 않아 감사 로그 사각지대가 있습니다.", platform="aws")
+            "다중 리전 CloudTrail 추적이 구성되지 않아 감사 로그 사각지대가 있습니다.", platform="aws",
+            evidence=_snippet(text, r"ismultiregion[^,}\n]*false", r"no trail", r"cloudtrail"))
     # VPC Flow Logs 미구성 (AWS)
     if re.search(r"flow[- ]?logs?", low) and re.search(r"\[\s*\]|\"?flowlogstatus\"?\s*[:=]\s*\"?inactive|no flow log", low):
         add("2.9.4", "vpc_flowlogs_missing", Severity.MEDIUM,
             "VPC Flow Logs 미구성/비활성",
             "VPC Flow Logs가 구성되지 않았거나 비활성(INACTIVE) 상태로, 네트워크 트래픽 감사 사각지대가 있습니다.",
-            platform="aws")
+            platform="aws",
+            evidence=_snippet(text, r"flowlogstatus[^,}\n]*inactive", r"no flow log", r"flow[- ]?logs?"))
     # AWS Config 레코더 비활성 (AWS)
     if re.search(r"configurationrecorder|config.{0,10}recorder", low) and \
             re.search(r'"?recording"?\s*[:=]\s*(false|0)|\[\s*\]|not recording', low):
         add("2.10.2", "aws_config_recorder_off", Severity.MEDIUM,
             "AWS Config 레코더 비활성",
             "AWS Config 구성 레코더가 비활성 상태로, 리소스 구성 변경 이력이 기록되지 않습니다.",
-            platform="aws")
+            platform="aws",
+            evidence=_snippet(text, r"recording[^,}\n]*(false|0)", r"configurationrecorder", r"config.{0,10}recorder"))
     # 백업 실패/LRS
     if re.search(r"lastbackupstatus.{0,10}failed|backup.{0,10}failed|백업.{0,5}실패", low):
         add("2.12.1", "backup_failed", Severity.HIGH,
-            "백업 실패 항목 존재", "lastBackupStatus가 Failed인 백업 항목이 있습니다.")
+            "백업 실패 항목 존재", "lastBackupStatus가 Failed인 백업 항목이 있습니다.",
+            evidence=_snippet(text, r"lastbackupstatus[^,}\n]*failed", r"backup[^,}\n]{0,10}failed", r"백업.{0,5}실패"))
     if re.search(r"\blrs\b|locallyredundant", low):
         add("2.12.1", "backup_lrs", Severity.MEDIUM,
             "백업 스토리지가 LRS(지역 중복 아님)",
-            "백업 스토리지가 LocallyRedundant(LRS)로 지역 재해 시 손실 위험이 있습니다.")
+            "백업 스토리지가 LocallyRedundant(LRS)로 지역 재해 시 손실 위험이 있습니다.",
+            evidence=_snippet(text, r"locallyredundant", r"\blrs\b"))
     # Defender/GuardDuty 알림
     if (re.search(r'"status"\s*:\s*"active"|active alert', low) and "defender" in low) or "security alert" in low:
         add("2.11.3", "defender_active_alert", Severity.MEDIUM,
             "Defender for Cloud 미해결 Active Alert",
-            "Defender for Cloud에 미해결(Active) 보안 경고가 존재할 수 있습니다.", platform="azure")
+            "Defender for Cloud에 미해결(Active) 보안 경고가 존재할 수 있습니다.", platform="azure",
+            evidence=_snippet(text, r"active alert", r"security alert", r'"status"\s*:\s*"active"', r"defender"))
     # 취약점 Unhealthy
     if re.search(r"unhealthy", low):
         add("2.11.2", "assessment_unhealthy", Severity.MEDIUM,
             "취약점 평가 Unhealthy 항목 존재",
-            "취약점 평가에서 Unhealthy 상태 항목이 확인됩니다.")
+            "취약점 평가에서 Unhealthy 상태 항목이 확인됩니다.",
+            evidence=_snippet(text, r"unhealthy"))
     # 패치 미적용
     if re.search(r"assess-?patches|update.?management|patch", low) and \
             re.search(r"critical|security|미적용|classificationstoinclude", low):
         add("2.10.8", "patch_pending", Severity.MEDIUM,
             "미적용 보안 패치 가능성",
-            "패치 평가 결과 Critical·Security 패치가 미적용 상태일 수 있습니다.")
+            "패치 평가 결과 Critical·Security 패치가 미적용 상태일 수 있습니다.",
+            evidence=_snippet(text, r"classificationstoinclude[^\]\n]*", r"critical", r"assess-?patches",
+                              r"update.?management", r"patch"))
     # CVE 취약점 탐지 (대소문자 무시, 표준 CVE-YYYY-NNNN 형식)
     cves = re.findall(r"CVE-\d{4}-\d{4,7}", text, re.I)
     if cves and "cve_detected" not in existing_types:

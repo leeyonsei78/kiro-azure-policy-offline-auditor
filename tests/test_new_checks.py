@@ -81,6 +81,39 @@ class NewDetectionTest(unittest.TestCase):
         self.assertIn("webapp_https_disabled", types)
 
 
+class EvidenceAndExampleTest(unittest.TestCase):
+    """텍스트 패턴 탐지가 '실제 근거 텍스트'를 보여주고, 예시가 채워지는지 검증."""
+
+    def _findings(self, text):
+        return analyze(text).to_dict()["findings"]
+
+    def test_raw_text_evidence_contains_real_snippet(self):
+        # 진단 설정 미구성: evidence에 입력의 실제 텍스트가 포함돼야 한다.
+        txt = "az monitor diagnostic-settings list 결과: [] (no diagnostic settings for prod-vm)"
+        f = [x for x in self._findings(txt) if x["issue_type"] == "diagnostic_missing"][0]
+        self.assertIn("근거 텍스트", f["evidence"])
+        self.assertIn("diagnostic", f["evidence"].lower())
+
+    def test_backup_failed_evidence(self):
+        txt = "lastBackupStatus: Failed (vault prod-bak)"
+        f = [x for x in self._findings(txt) if x["issue_type"] == "backup_failed"][0]
+        self.assertIn("Failed", f["evidence"])
+
+    def test_new_checks_have_examples(self):
+        # 신규 탐지 항목에 위반/개선 예시가 채워져야 한다.
+        txt = json.dumps([{"DBInstanceIdentifier": "db1", "Engine": "mysql",
+                           "PubliclyAccessible": True}])
+        f = [x for x in self._findings(txt) if x["issue_type"] == "aws_rds_public"][0]
+        self.assertTrue(f["bad_example"])
+        self.assertTrue(f["good_example"])
+
+    def test_text_fallback_has_examples(self):
+        txt = "conditional access state: disabled mfa 없음"
+        f = [x for x in self._findings(txt) if x["issue_type"] == "mfa_ca_disabled"][0]
+        self.assertTrue(f["bad_example"])
+        self.assertTrue(f["good_example"])
+
+
 class NewCommandCoverageTest(unittest.TestCase):
     """새로 추가한 수집 명령어가 명령어 가이드에 포함됐는지 확인."""
 
