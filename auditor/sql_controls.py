@@ -41,6 +41,11 @@ SQL_CHECKS: list[dict] = [
         "how_to_fix": "1) Key Vault에 키를 만들고 SQL 서버에 등록합니다(az sql server key create).\n"
                       "2) az sql server tde-key set --server-key-type AzureKeyVault 로 CMK로 전환합니다.\n"
                       "3) 해당 Key Vault는 Soft-delete·Purge Protection을 반드시 켭니다.",
+        "steps": "[포털] Azure Portal → 'SQL 서버' → 해당 서버 → 보안 '투명한 데이터 암호화' → "
+                 "'고객 관리형 키' 선택 → Key Vault와 키 지정 → 저장.\n"
+                 "[CLI]\n"
+                 "  az sql server key create -g <RG> -s <서버> -k <KeyVault키URL>\n"
+                 "  az sql server tde-key set -g <RG> -s <서버> --server-key-type AzureKeyVault -k <KeyVault키URL>",
     },
     {
         "key": "sql_public_access",
@@ -71,6 +76,11 @@ SQL_CHECKS: list[dict] = [
         "how_to_fix": "1) az network private-endpoint create 로 SQL용 Private Endpoint를 만듭니다.\n"
                       "2) Private DNS Zone(privatelink.database.windows.net)을 연결합니다.\n"
                       "3) 이후 publicNetworkAccess=Disabled 로 퍼블릭 경로를 닫습니다.",
+        "steps": "[포털] Azure Portal → 'SQL 서버' → 해당 서버 → 보안 '네트워킹' → '프라이빗 액세스' 탭 "
+                 "→ '+ 프라이빗 엔드포인트 만들기' → VNet/서브넷 선택 → 프라이빗 DNS 통합 '예' → 만들기.\n"
+                 "[CLI]\n"
+                 "  az network private-endpoint create -g <RG> -n <PE이름> --vnet-name <VNet> --subnet <서브넷> "
+                 "--private-connection-resource-id <SQL서버ID> --group-id sqlServer --connection-name sqlconn",
     },
     {
         "key": "sql_auditing_disabled",
@@ -116,6 +126,12 @@ SQL_CHECKS: list[dict] = [
         "how_to_fix": "1) az sql server vulnerability-assessment update 로 결과 저장소를 연결합니다.\n"
                       "2) 정기 스캔(recurringScans)을 켜고 결과 이메일 수신을 설정합니다.\n"
                       "3) Defender for SQL과 함께 사용해 탐지 범위를 넓힙니다.",
+        "steps": "[포털] Azure Portal → 'SQL 서버' → 보안 'Microsoft Defender for Cloud' → "
+                 "'취약성 평가 설정 구성' → 저장소 계정 지정 → '정기 반복 검사' 켜기 → 결과 수신 이메일 입력 → 저장.\n"
+                 "[CLI]\n"
+                 "  az sql server vulnerability-assessment update -g <RG> -n <서버> "
+                 "--storage-container-path https://<저장소>.blob.core.windows.net/vulnerability-assessment "
+                 "--recurring-scans Enabled --email-subscription-admins true",
     },
     {
         "key": "sql_ltr_not_configured",
@@ -131,6 +147,11 @@ SQL_CHECKS: list[dict] = [
         "how_to_fix": "1) az sql db ltr-policy set 로 주/월/년 보존 정책을 설정합니다.\n"
                       "2) 조직·규제 기준에 맞춰 보존기간을 정합니다(예: 주 4주·월 12개월·년 7년).\n"
                       "3) 주기적으로 복원 테스트를 수행합니다.",
+        "steps": "[포털] Azure Portal → 'SQL 서버' → 데이터 관리 '백업' → '보존 정책 구성' → 대상 DB 선택 "
+                 "→ 주/월/년 장기 보존(LTR) 값 설정 → 적용.\n"
+                 "[CLI]\n"
+                 "  az sql db ltr-policy set -g <RG> -s <서버> -n <DB> "
+                 "--weekly-retention P4W --monthly-retention P12M --yearly-retention P7Y --week-of-year 1",
     },
 ]
 

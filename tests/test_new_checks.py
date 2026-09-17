@@ -144,6 +144,33 @@ class EvidenceAndExampleTest(unittest.TestCase):
         f = [x for x in self._findings(txt) if x["issue_type"] == "aws_rds_public"][0]
         self.assertIn("aws rds modify-db-instance", f["steps"])
 
+    def test_every_explained_issue_has_steps(self):
+        # 설명(why/how_to_fix)이 있는 모든 이슈 유형은 따라하기(steps)도 있어야 한다.
+        from auditor.engine import _EXPLAIN, _STEPS
+        missing = [k for k in _EXPLAIN if k not in _STEPS]
+        self.assertEqual(missing, [], f"steps 누락 이슈유형: {missing}")
+
+    def test_text_fallback_items_have_steps(self):
+        # 대표 텍스트 폴백 항목들이 steps를 갖는지.
+        for txt, want in [
+            ("diagnostic-settings list: [] no diagnostic", "diagnostic_missing"),
+            ("lastBackupStatus: Failed", "backup_failed"),
+            ("patch classificationsToInclude=[Critical,Security] 미적용", "patch_pending"),
+            ("CVE-2021-44228 발견", "cve_detected"),
+        ]:
+            f = [x for x in self._findings(txt) if x["issue_type"] == want]
+            self.assertTrue(f, f"{want} 미탐지")
+            self.assertTrue(f[0]["steps"], f"{want} steps 비어 있음")
+
+    def test_sql_items_have_steps(self):
+        for obj, want in [
+            ({"state": "Disabled", "transparentDataEncryption": True}, "sql_tde_disabled"),
+            ({"recurringScans": {"isEnabled": False}, "vulnerabilityAssessment": True}, "sql_va_disabled"),
+        ]:
+            f = [x for x in self._findings(json.dumps([obj])) if x["issue_type"] == want]
+            self.assertTrue(f, f"{want} 미탐지")
+            self.assertTrue(f[0]["steps"], f"{want} steps 비어 있음")
+
     def test_evidence_is_longer_context(self):
         # 근거 텍스트가 충분한 문맥을 담는지(짧게 잘리지 않는지) 확인.
         txt = ("az monitor diagnostic-settings list 결과: [] "

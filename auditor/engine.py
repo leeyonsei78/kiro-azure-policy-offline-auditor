@@ -535,6 +535,114 @@ _STEPS: dict[str, str] = {
         "[CLI]\n"
         "  az sql server advanced-threat-protection-setting update -g <RG> -n <서버> --state Enabled"
     ),
+    # ---- AWS 추가 ----
+    "aws_sg_open_any": (
+        "[포털] AWS 콘솔 → EC2 → '보안 그룹' → 해당 SG → '인바운드 규칙' 탭 → '인바운드 규칙 편집' "
+        "→ 소스 0.0.0.0/0 규칙을 필요한 CIDR로 변경하거나 삭제 → '규칙 저장'.\n"
+        "[CLI]\n"
+        "  aws ec2 revoke-security-group-ingress --group-id <SG-ID> --protocol tcp --port <포트> --cidr 0.0.0.0/0"
+    ),
+    "aws_s3_no_encryption": (
+        "[포털] AWS 콘솔 → S3 → 버킷 → '속성' 탭 → '기본 암호화' → '편집' → 'SSE-KMS' 선택 "
+        "→ KMS 키 지정 → '변경 사항 저장'.\n"
+        "[CLI]\n"
+        "  aws s3api put-bucket-encryption --bucket <버킷이름> "
+        "--server-side-encryption-configuration '{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"aws:kms\"}}]}'"
+    ),
+    "aws_iam_wildcard_admin": (
+        "[포털] AWS 콘솔 → IAM → 정책 → 해당 정책 → '편집' → Action:* / Resource:* 를 "
+        "필요한 서비스·리소스로 좁힘 → '다음' → '변경 사항 저장'. (또는 사용자/역할에서 해당 정책 분리)\n"
+        "[CLI] 과다 권한 정책 분리:\n"
+        "  aws iam detach-user-policy --user-name <사용자> --policy-arn <정책ARN>\n"
+        "  실제 필요한 권한은 IAM Access Analyzer의 '정책 생성'으로 최소 권한 정책을 만들어 부여"
+    ),
+    "vpc_flowlogs_missing": (
+        "[포털] AWS 콘솔 → VPC → 해당 VPC 선택 → '흐름 로그' 탭 → '흐름 로그 생성' "
+        "→ 필터 'All' → 대상(CloudWatch Logs 또는 S3) 지정 → '흐름 로그 생성'.\n"
+        "[CLI]\n"
+        "  aws ec2 create-flow-logs --resource-type VPC --resource-ids <VPC-ID> "
+        "--traffic-type ALL --log-destination-type s3 --log-destination arn:aws:s3:::<로그버킷>"
+    ),
+    "aws_config_recorder_off": (
+        "[포털] AWS 콘솔 → AWS Config → '설정' → '기록 켜기'(Recording on) → 기록할 리소스 유형 "
+        "선택 → S3·역할 지정 → 저장. (모든 리전에서 반복)\n"
+        "[CLI]\n"
+        "  aws configservice start-configuration-recorder --configuration-recorder-name default"
+    ),
+    # ---- Azure 추가 ----
+    "nsg_open_any": (
+        "[포털] Azure Portal → '네트워크 보안 그룹' → 해당 NSG → '인바운드 보안 규칙' → 소스가 "
+        "'Any/Internet'인 규칙 클릭 → '소스'를 'IP Addresses'로 바꿔 회사 IP 입력 → 저장.\n"
+        "[CLI]\n"
+        "  az network nsg rule update -g <RG> --nsg-name <NSG> -n <규칙이름> --source-address-prefixes <회사IP>/32"
+    ),
+    "nsg_outbound_any": (
+        "[포털] Azure Portal → NSG → '아웃바운드 보안 규칙' → 목적지 '*' 규칙 클릭 → 대상을 "
+        "필요한 서비스 태그/IP로 변경 → 저장.\n"
+        "[CLI]\n"
+        "  az network nsg rule update -g <RG> --nsg-name <NSG> -n <규칙이름> --destination-address-prefixes <서비스태그 또는 IP>"
+    ),
+    "disk_no_cmk": (
+        "[포털] Azure Portal → '디스크 암호화 집합' → '만들기'(Key Vault 키 지정) → 이후 대상 디스크 "
+        "→ '암호화' → '고객 관리형 키' 선택 → 방금 만든 암호화 집합 지정 → 저장.\n"
+        "[CLI]\n"
+        "  az disk-encryption-set create -g <RG> -n <암호화집합> --key-url <KeyVault키URL> --source-vault <KeyVaultID>\n"
+        "  az disk update -g <RG> -n <디스크> --disk-encryption-set <암호화집합>"
+    ),
+    "rbac_privileged_assignment": (
+        "[포털] Azure Portal → 대상 구독/리소스그룹 → '액세스 제어(IAM)' → '역할 할당' 탭 → 과다 "
+        "권한(Owner 등) 할당 선택 → '제거', 필요한 최소 역할(Reader/Contributor)로 재할당.\n"
+        "[CLI] 과다 권한 제거:\n"
+        "  az role assignment delete --assignee <주체> --role \"Owner\" --scope <범위>\n"
+        "  최소 권한 재부여: az role assignment create --assignee <주체> --role \"Reader\" --scope <범위>\n"
+        "  상시 권한 대신 PIM(Privileged Identity Management)으로 필요할 때만 승격 권장"
+    ),
+    "diagnostic_missing": (
+        "[포털] Azure Portal → 대상 리소스 → 모니터링 '진단 설정' → '진단 설정 추가' → 로그/메트릭 "
+        "카테고리 선택 → 대상(Log Analytics 작업 영역 또는 저장소) 지정 → 저장.\n"
+        "[CLI]\n"
+        "  az monitor diagnostic-settings create --name diag --resource <리소스ID> "
+        "--workspace <LogAnalytics작업영역ID> --logs '[{\"category\":\"AuditEvent\",\"enabled\":true}]'"
+    ),
+    "backup_failed": (
+        "[포털] Azure Portal → 'Recovery Services 자격 증명 모음' → '백업 항목' → 실패 항목 클릭 "
+        "→ '지금 백업'으로 재시도, 실패 원인(오류 메시지) 확인 후 조치.\n"
+        "[CLI] 백업 즉시 실행:\n"
+        "  az backup protection backup-now -g <RG> -v <자격증명모음> -c <컨테이너> -i <항목> --retain-until <날짜>"
+    ),
+    "backup_lrs": (
+        "[포털] Azure Portal → Recovery Services 자격 증명 모음 → 설정 '속성' → '백업 구성' "
+        "→ 저장소 복제 종류를 'geo-redundant(GRS)'로 변경 → 저장. (백업 항목 등록 전에만 변경 가능)\n"
+        "[CLI]\n"
+        "  az backup vault backup-properties set -g <RG> -n <자격증명모음> --backup-storage-redundancy GeoRedundant"
+    ),
+    "defender_active_alert": (
+        "[포털] Azure Portal → 'Microsoft Defender for Cloud' → '보안 경고' → 각 Active 경고 클릭 "
+        "→ 권장 조치 수행 → 처리 후 '상태 변경'에서 '해결됨'으로.\n"
+        "[CLI] 경고 목록 확인(조치는 포털 권장):\n"
+        "  az security alert list --query \"[?properties.status=='Active']\""
+    ),
+    "assessment_unhealthy": (
+        "[포털] Azure Portal → Defender for Cloud → '권장 사항' → Unhealthy 항목 클릭 → '수정' "
+        "(Fix) 버튼이 있으면 클릭, 없으면 안내된 단계 수행 → Healthy 전환 확인.\n"
+        "[CLI] 항목 확인:\n"
+        "  az security assessment list --query \"[?status.code=='Unhealthy']\""
+    ),
+    "patch_pending": (
+        "[포털] Azure Portal → 'Azure Update Manager' → '컴퓨터' → 대상 VM 선택 → '한 번 업데이트 "
+        "설치'로 즉시 적용, 또는 '정기 업데이트'로 유지 관리 일정 등록.\n"
+        "[CLI] 평가/설치:\n"
+        "  az vm assess-patches -g <RG> -n <VM이름>\n"
+        "  az vm install-patches -g <RG> -n <VM이름> --maximum-duration PT2H --reboot-setting IfRequired "
+        "--classifications-to-include-linux Critical Security"
+    ),
+    "cve_detected": (
+        "[공통] 1) 발견된 CVE 번호를 NVD(nvd.nist.gov)나 벤더 공지에서 검색해 영향 제품·버전 확인.\n"
+        "2) 해당 소프트웨어/OS를 패치 버전으로 업데이트(OS 패키지 관리자, 벤더 업데이트).\n"
+        "[Azure] Azure Update Manager로 VM 패치 적용:  az vm install-patches -g <RG> -n <VM> ...\n"
+        "[AWS] SSM Patch Manager로 적용:  aws ssm send-command --document-name AWS-RunPatchBaseline ...\n"
+        "3) 즉시 패치 불가 시 WAF 규칙 추가·네트워크 접근 차단 등 임시 완화."
+    ),
 }
 
 
