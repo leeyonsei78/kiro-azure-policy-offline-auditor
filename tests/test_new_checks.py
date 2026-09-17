@@ -129,6 +129,21 @@ class EvidenceAndExampleTest(unittest.TestCase):
         self.assertTrue(f["why"])
         self.assertTrue(f["how_to_fix"])
 
+    def test_findings_have_concrete_steps(self):
+        # 실제 변경 방법(steps)에 포털 클릭 순서와 CLI 명령어가 모두 있어야 한다.
+        txt = json.dumps([{"name": "stg1", "allowBlobPublicAccess": True}])
+        f = [x for x in self._findings(txt) if x["issue_type"] == "storage_public_blob"][0]
+        self.assertTrue(f["steps"], "steps(따라하기)가 비어 있음")
+        self.assertIn("[포털]", f["steps"])
+        self.assertIn("[CLI]", f["steps"])
+        self.assertIn("az storage account update", f["steps"])
+
+    def test_aws_steps_present(self):
+        txt = json.dumps([{"DBInstanceIdentifier": "db1", "Engine": "mysql",
+                           "PubliclyAccessible": True}])
+        f = [x for x in self._findings(txt) if x["issue_type"] == "aws_rds_public"][0]
+        self.assertIn("aws rds modify-db-instance", f["steps"])
+
     def test_evidence_is_longer_context(self):
         # 근거 텍스트가 충분한 문맥을 담는지(짧게 잘리지 않는지) 확인.
         txt = ("az monitor diagnostic-settings list 결과: [] "

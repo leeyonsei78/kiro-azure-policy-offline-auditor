@@ -76,6 +76,11 @@ def format_text(report: AuditReport) -> str:
                 for step in f.how_to_fix.splitlines():
                     if step.strip():
                         lines.append(f"        {step.strip()}")
+            if getattr(f, "steps", ""):
+                lines.append("      따라하기(포털 클릭 순서 + 실행 명령어):")
+                for step in f.steps.splitlines():
+                    if step.strip():
+                        lines.append(f"        {step.strip()}")
             if getattr(f, "bad_example", ""):
                 lines.append(f"      위반 예시: {f.bad_example}")
             if getattr(f, "good_example", ""):
@@ -110,6 +115,7 @@ _CSV_COLUMNS = [
     ("why", "왜 문제인가"),
     ("recommendation", "개선방안"),
     ("how_to_fix", "해결 방법(단계별)"),
+    ("steps", "따라하기(포털+명령어)"),
     ("bad_example", "위반예시"),
     ("good_example", "개선예시"),
     ("evidence", "판단 근거"),
@@ -182,6 +188,8 @@ def format_html(report: AuditReport) -> str:
                    if getattr(f, "why", "") else "")
             howto = (f"<div class='howto'><b>🛠️ 해결 방법(단계별)</b><br>{_esc(getattr(f, 'how_to_fix', '')).replace(chr(10), '<br>')}</div>"
                      if getattr(f, "how_to_fix", "") else "")
+            steps = (f"<div class='steps'><b>📖 따라하기 (포털 클릭 순서 + 실행 명령어)</b><br>{_esc(getattr(f, 'steps', '')).replace(chr(10), '<br>')}</div>"
+                     if getattr(f, "steps", "") else "")
             bad = (f"<div class='ex bad'><b>✗ 위반 예시:</b> <code>{_esc(f.bad_example)}</code></div>"
                    if getattr(f, "bad_example", "") else "")
             good = (f"<div class='ex good'><b>✓ 개선 예시:</b> <code>{_esc(f.good_example)}</code></div>"
@@ -195,6 +203,7 @@ def format_html(report: AuditReport) -> str:
                 f"{why}"
                 f"<div class='fix'><b>개선:</b> {_esc(f.recommendation)}</div>"
                 f"{howto}"
+                f"{steps}"
                 f"{bad}{good}{evi}</div>"
             )
         cmd_html = ""
@@ -233,6 +242,7 @@ def format_html(report: AuditReport) -> str:
   .fix{{ background:#f2f7ff; border-left:3px solid #2980b9; padding:4px 8px; }}
   .why{{ margin-top:4px; background:#fdf6e3; border-left:3px solid #d6a412; padding:4px 8px; font-size:12px; line-height:1.5; }}
   .howto{{ margin-top:4px; background:#eef5ff; border-left:3px solid #2980b9; padding:4px 8px; font-size:12px; line-height:1.55; }}
+  .steps{{ margin-top:4px; background:#f0f7f2; border-left:3px solid #27ae60; padding:4px 8px; font-size:11.5px; line-height:1.6; font-family:Consolas,monospace; word-break:break-all; }}
   .evlabel{{ margin-top:6px; font-size:11px; color:#555; }}
   .ex{{ margin-top:4px; padding:4px 8px; border-radius:4px; font-size:12px; }}
   .ex code{{ font-family:Consolas,monospace; word-break:break-all; }}

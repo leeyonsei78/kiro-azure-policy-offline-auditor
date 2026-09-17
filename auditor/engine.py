@@ -401,11 +401,148 @@ _EXPLAIN: dict[str, dict[str, str]] = {
 }
 
 
+# 이슈 유형별 '실제 변경/설정 방법'. 초보 담당자가 그대로 따라할 수 있도록
+# [포털 클릭 순서]와 [CLI 명령어]를 함께 제공한다. 명령의 <RG>·<이름> 등은
+# 사용자가 자기 환경 값으로 바꿔 넣는 자리표시자.
+_STEPS: dict[str, str] = {
+    # ---- AWS ----
+    "aws_sg_open_sensitive_port": (
+        "[포털] AWS 콘솔 → EC2 → 좌측 '보안 그룹' → 해당 보안그룹 선택 → '인바운드 규칙' 탭 "
+        "→ '인바운드 규칙 편집' → 문제 규칙의 소스를 '내 IP' 또는 회사 CIDR로 변경 → '규칙 저장'.\n"
+        "[CLI] 잘못된 규칙 제거:\n"
+        "  aws ec2 revoke-security-group-ingress --group-id <SG-ID> --protocol tcp --port 22 --cidr 0.0.0.0/0\n"
+        "  아래처럼 허용 IP만 다시 추가:\n"
+        "  aws ec2 authorize-security-group-ingress --group-id <SG-ID> --protocol tcp --port 22 --cidr <내IP>/32"
+    ),
+    "aws_rds_public": (
+        "[포털] AWS 콘솔 → RDS → 데이터베이스 → 해당 DB 선택 → '수정' → '연결' 섹션의 "
+        "'추가 구성' → '퍼블릭 액세스'를 '퍼블릭 액세스 불가'로 → '계속' → '즉시 적용' → '수정'.\n"
+        "[CLI]\n"
+        "  aws rds modify-db-instance --db-instance-identifier <DB이름> --no-publicly-accessible --apply-immediately"
+    ),
+    "aws_s3_public_block_off": (
+        "[포털] AWS 콘솔 → S3 → 해당 버킷 → '권한' 탭 → '퍼블릭 액세스 차단' → '편집' "
+        "→ 4개 체크박스 모두 선택 → '변경 사항 저장'(확인 문구 입력).\n"
+        "[CLI]\n"
+        "  aws s3api put-public-access-block --bucket <버킷이름> "
+        "--public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,"
+        "BlockPublicPolicy=true,RestrictPublicBuckets=true"
+    ),
+    "aws_s3_public_policy": (
+        "[포털] AWS 콘솔 → S3 → 버킷 → '권한' 탭 → '버킷 정책' → '편집' → Principal:\"*\" 가 있는 "
+        "Statement 삭제 또는 특정 주체로 변경 → '변경 사항 저장'.\n"
+        "[CLI] 현재 정책 확인 후 수정:\n"
+        "  aws s3api get-bucket-policy --bucket <버킷이름>\n"
+        "  (필요 시) aws s3api delete-bucket-policy --bucket <버킷이름>"
+    ),
+    "aws_ebs_snapshot_public": (
+        "[포털] AWS 콘솔 → EC2 → '스냅샷' → 해당 스냅샷 선택 → 작업 → '권한 수정' "
+        "→ '비공개' 선택(또는 특정 계정만) → 저장.\n"
+        "[CLI]\n"
+        "  aws ec2 reset-snapshot-attribute --snapshot-id <스냅샷ID> --attribute createVolumePermission"
+    ),
+    "aws_iam_no_mfa": (
+        "[포털] AWS 콘솔 → IAM → 사용자 → 해당 사용자 → '보안 자격 증명' 탭 → 'MFA 디바이스 할당' "
+        "→ 인증 앱(Authenticator) 등록 → 완료.\n"
+        "[CLI] 가상 MFA 생성:\n"
+        "  aws iam create-virtual-mfa-device --virtual-mfa-device-name <사용자>-mfa --outfile qrcode.png --bootstrap-method QRCodePNG\n"
+        "  aws iam enable-mfa-device --user-name <사용자> --serial-number <MFA-ARN> --authentication-code1 <코드1> --authentication-code2 <코드2>"
+    ),
+    "aws_root_access_key": (
+        "[포털] AWS 콘솔 우측 상단 계정명 → '보안 자격 증명'(루트로 로그인) → '액세스 키' 섹션 "
+        "→ 해당 키 '삭제'. 이후 같은 화면에서 'MFA 할당'.\n"
+        "[CLI] 루트 키는 콘솔에서만 삭제하는 것을 권장(루트 CLI 사용 자체를 피함)."
+    ),
+    "cloudtrail_missing": (
+        "[포털] AWS 콘솔 → CloudTrail → '추적 생성' → 이름 입력 → '모든 리전에 적용' 체크 "
+        "→ 로그 저장 S3 지정 → 'KMS 암호화'·'로그 파일 검증' 활성화 → 생성.\n"
+        "[CLI]\n"
+        "  aws cloudtrail create-trail --name org-trail --s3-bucket-name <로그버킷> --is-multi-region-trail\n"
+        "  aws cloudtrail start-logging --name org-trail"
+    ),
+    # ---- Azure ----
+    "nsg_open_sensitive_port": (
+        "[포털] Azure Portal → '네트워크 보안 그룹' → 해당 NSG → '인바운드 보안 규칙' → 문제 규칙 클릭 "
+        "→ '소스'를 'IP Addresses'로 바꾸고 회사 IP 입력(또는 규칙 삭제) → 저장.\n"
+        "[CLI] 규칙 소스 제한:\n"
+        "  az network nsg rule update -g <RG> --nsg-name <NSG> -n <규칙이름> --source-address-prefixes <회사IP>/32\n"
+        "  또는 삭제: az network nsg rule delete -g <RG> --nsg-name <NSG> -n <규칙이름>"
+    ),
+    "nsg_open_all_ports": (
+        "[포털] Azure Portal → NSG → '인바운드 보안 규칙' → 전체 허용(*) 규칙 클릭 → 필요한 포트/소스로 "
+        "좁히거나 '삭제' → 저장.\n"
+        "[CLI]\n"
+        "  az network nsg rule delete -g <RG> --nsg-name <NSG> -n <규칙이름>"
+    ),
+    "storage_public_blob": (
+        "[포털] Azure Portal → '저장소 계정' → 해당 계정 → 설정 '구성' → 'Blob 공용 액세스 허용'을 "
+        "'사용 안 함' → 저장.\n"
+        "[CLI]\n"
+        "  az storage account update -g <RG> -n <저장소계정> --allow-blob-public-access false"
+    ),
+    "storage_https_disabled": (
+        "[포털] Azure Portal → 저장소 계정 → '구성' → '보안 전송 필요'를 '사용' → '최소 TLS 버전' 1.2 → 저장.\n"
+        "[CLI]\n"
+        "  az storage account update -g <RG> -n <저장소계정> --https-only true --min-tls-version TLS1_2"
+    ),
+    "storage_weak_tls": (
+        "[포털] Azure Portal → 저장소 계정 → '구성' → '최소 TLS 버전'을 'Version 1.2'로 → 저장.\n"
+        "[CLI]\n"
+        "  az storage account update -g <RG> -n <저장소계정> --min-tls-version TLS1_2"
+    ),
+    "webapp_https_disabled": (
+        "[포털] Azure Portal → 'App Service' → 해당 앱 → 설정 '구성' → '일반 설정' → 'HTTPS 전용'을 '켜기' "
+        "→ '최소 TLS 버전' 1.2 → 저장.\n"
+        "[CLI]\n"
+        "  az webapp update -g <RG> -n <앱이름> --https-only true\n"
+        "  az webapp config set -g <RG> -n <앱이름> --min-tls-version 1.2"
+    ),
+    "keyvault_softdelete_off": (
+        "[포털] Azure Portal → 'Key Vault' → 해당 자격 증명 모음 → '속성' → '삭제 취소'(Soft delete) 확인 "
+        "→ '보호 제거'(Purge protection) '사용'으로 → 저장.\n"
+        "[CLI]\n"
+        "  az keyvault update -g <RG> -n <키볼트이름> --enable-soft-delete true --enable-purge-protection true"
+    ),
+    "keyvault_purge_off": (
+        "[포털] Azure Portal → Key Vault → '속성' → '보호 제거'(Purge protection)를 '사용' → 저장.\n"
+        "[CLI]\n"
+        "  az keyvault update -g <RG> -n <키볼트이름> --enable-purge-protection true"
+    ),
+    "mfa_ca_disabled": (
+        "[포털-간편] Azure Portal → 'Microsoft Entra ID' → '속성' → '보안 기본값 관리' → '사용'으로 → 저장.\n"
+        "[포털-정밀] Entra ID → '보안' → '조건부 액세스' → '새 정책' → 대상 사용자/앱 지정 → "
+        "'권한 부여'에서 '다단계 인증 필요' 체크 → '사용' → 만들기."
+    ),
+    "sql_public_access": (
+        "[포털] Azure Portal → 'SQL 서버' → 해당 서버 → 보안 '네트워킹' → '공용 네트워크 액세스'를 "
+        "'사용 안 함'으로 → 기존 0.0.0.0 방화벽 규칙 삭제 → 저장.\n"
+        "[CLI]\n"
+        "  az sql server update -g <RG> -n <서버> --set publicNetworkAccess=Disabled\n"
+        "  az sql server firewall-rule delete -g <RG> -s <서버> -n AllowAllWindowsAzureIps"
+    ),
+    "sql_tde_disabled": (
+        "[포털] Azure Portal → 'SQL 데이터베이스' → 해당 DB → 보안 '투명한 데이터 암호화' → '켜기' → 저장.\n"
+        "[CLI]\n"
+        "  az sql db tde set -g <RG> -s <서버> -n <DB> --status Enabled"
+    ),
+    "sql_auditing_disabled": (
+        "[포털] Azure Portal → SQL 서버 → 보안 '감사' → '켜기' → 로그 대상(Log Analytics/Storage) 선택 → 저장.\n"
+        "[CLI]\n"
+        "  az sql server audit-policy update -g <RG> -n <서버> --state Enabled --bsts Enabled --storage-account <저장소계정>"
+    ),
+    "sql_defender_disabled": (
+        "[포털] Azure Portal → SQL 서버 → 보안 'Microsoft Defender for Cloud' → 'Microsoft Defender for SQL 사용' → 저장.\n"
+        "[CLI]\n"
+        "  az sql server advanced-threat-protection-setting update -g <RG> -n <서버> --state Enabled"
+    ),
+}
+
+
 def _finding(code: str, issue_type: str, severity: Severity, title: str,
              description: str, *, platform: str = "azure", evidence: str = "",
              resource: str = "", recommendation: str = "",
              bad_example: str = "", good_example: str = "",
-             why: str = "", how_to_fix: str = "") -> Finding:
+             why: str = "", how_to_fix: str = "", steps: str = "") -> Finding:
     kb = control_for(code, platform)
     # 이슈 유형별 맞춤 예시가 있으면 우선 사용, 없으면 통제항목 기본값.
     ex = _EXAMPLES.get(issue_type, {})
@@ -425,6 +562,7 @@ def _finding(code: str, issue_type: str, severity: Severity, title: str,
         good_example=good_example or ex.get("good", "") or kb.get("good_example", ""),
         why=why or expl.get("why", ""),
         how_to_fix=how_to_fix or expl.get("how_to_fix", ""),
+        steps=steps or _STEPS.get(issue_type, ""),
     )
 
 
@@ -590,6 +728,7 @@ def _sql_finding(key: str, severity: Severity, findings: list[Finding],
         good_example=meta.get("good_example", ""),
         why=meta.get("why", ""),
         how_to_fix=meta.get("how_to_fix", ""),
+        steps=meta.get("steps", "") or _STEPS.get(key, ""),
     ))
 
 

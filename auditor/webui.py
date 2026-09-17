@@ -97,6 +97,8 @@ INDEX_HTML = """<!DOCTYPE html>
   .fix{ margin-top:6px; padding:8px 10px; background:#10233a; border-radius:8px; border:1px solid var(--border); font-size:13px; }
   .why{ margin-top:6px; padding:8px 10px; background:#2a2410; border-left:3px solid #e0b341; border-radius:6px; font-size:13px; line-height:1.55; }
   .howto{ margin-top:6px; padding:8px 10px; background:#10233a; border-left:3px solid #4da3ff; border-radius:6px; font-size:13px; line-height:1.6; }
+  .steps{ margin-top:6px; padding:8px 10px; background:#0e1f16; border-left:3px solid #37d67a; border-radius:6px; font-size:12.5px; line-height:1.65; font-family:Consolas,'D2Coding',monospace; word-break:break-all; color:#dbe7dd; }
+  .steps b{ font-family:inherit; }
   .evlabel{ margin-top:8px; font-size:12px; color:var(--muted); }
   .exbad{ margin-top:6px; padding:6px 10px; background:#2a1518; border-left:3px solid var(--crit); border-radius:6px; font-size:12px; }
   .exgood{ margin-top:6px; padding:6px 10px; background:#0f2418; border-left:3px solid #37d67a; border-radius:6px; font-size:12px; }
@@ -428,6 +430,7 @@ function renderFindings(r){
       if(f.why) html+='<div class="why"><b>❓ 왜 문제인가요?</b><br>'+nl2br(esc(f.why))+'</div>';
       html+='<div class="fix"><b>✅ 개선 제안:</b> '+esc(f.recommendation)+'</div>';
       if(f.how_to_fix) html+='<div class="howto"><b>🛠️ 해결 방법(단계별)</b><br>'+nl2br(esc(f.how_to_fix))+'</div>';
+      if(f.steps) html+='<div class="steps"><b>📖 따라하기 (포털 클릭 순서 + 실행 명령어)</b><br>'+nl2br(esc(f.steps))+'</div>';
       if(f.bad_example) html+='<div class="exbad"><b>✗ 위반 예시:</b> <code>'+esc(f.bad_example)+'</code></div>';
       if(f.good_example) html+='<div class="exgood"><b>✓ 개선 예시:</b> <code>'+esc(f.good_example)+'</code></div>';
       if(f.evidence) html+='<div class="evlabel"><b>🔎 판단 근거(입력에서 감지된 내용)</b></div><pre>'+esc(f.evidence)+'</pre>';

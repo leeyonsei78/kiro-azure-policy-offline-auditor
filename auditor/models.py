@@ -57,6 +57,8 @@ class Finding:
         good_example: 개선(안전) 설정 예시.
         why: 왜 문제인지(위험)를 초보 담당자도 이해하도록 쉽게 설명.
         how_to_fix: 해결 방안을 단계별(1,2,3…)로 안내하는 상세 설명.
+        steps: 실제 변경 방법(포털 클릭 순서 + 복사해서 실행할 CLI 명령어)을 초보자가
+               그대로 따라할 수 있도록 구체적으로 안내.
     """
 
     control_code: str
@@ -73,6 +75,7 @@ class Finding:
     good_example: str = ""
     why: str = ""
     how_to_fix: str = ""
+    steps: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
