@@ -201,7 +201,7 @@ INDEX_HTML = """<!DOCTYPE html>
 </main>
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-function nl2br(s){ return String(s==null?'':s).replace(/\n/g,'<br>'); }
+function nl2br(s){ return String(s==null?'':s).replace(/\\n/g,'<br>'); }
 
 // ----- 탭 -----
 function switchTab(t){
