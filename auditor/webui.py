@@ -108,6 +108,7 @@ INDEX_HTML = """<!DOCTYPE html>
   .trtitle{ flex:1; font-size:13px; }
   .trfac{ font-size:11px; color:var(--muted); background:#0b1220; padding:2px 6px; border-radius:5px; }
   .mitre{ display:inline-block; font-size:11px; font-weight:700; color:#c39bff; background:#241a38; border:1px solid #4b3a6b; padding:1px 7px; border-radius:4px; margin-right:6px; }
+  .loc{ font-size:12px; color:#bfe3ff; background:#0e2233; border-left:3px solid #2f6f9f; border-radius:5px; padding:4px 9px; margin-top:4px; }
   .trendbar{ display:flex; gap:8px; flex-wrap:wrap; margin:6px 0; }
   .tb{ font-size:13px; font-weight:700; padding:4px 10px; border-radius:8px; border:1px solid var(--border); }
   .tb-new{ background:#2a1518; color:#ff9b9b; }
@@ -552,6 +553,7 @@ function _renderFindings(r){
         '<span class="code">'+esc(f.control_code)+'</span>'+
         '<span class="ftitle">'+esc(f.title)+'</span></div>';
       if(f.resource) html+='<div class="meta"><b>대상:</b> '+esc(f.resource)+'</div>';
+      if(f.location) html+='<div class="loc"><b>📍 위치:</b> '+esc(f.location)+'</div>';
       if(f.mitre_id) html+='<div class="meta"><span class="mitre">ATT&CK '+esc(f.mitre_id)+'</span> '+esc(f.mitre_name)+'</div>';
       html+='<div class="meta"><b>문제:</b> '+esc(f.description)+'</div>';
       if(f.why) html+='<div class="why"><b>❓ 왜 문제인가요?</b><br>'+nl2br(esc(f.why))+'</div>';

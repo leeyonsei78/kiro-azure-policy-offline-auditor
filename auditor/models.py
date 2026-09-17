@@ -52,6 +52,7 @@ class Finding:
         description: 왜 문제인지 설명(ISMS-P 판단기준 기반).
         recommendation: 개선 방안(ISMS-P 개선방안 기반).
         resource: 관련 리소스 식별자(있으면).
+        location: 리소스 위치(Azure: 구독/리소스그룹/리전, AWS: 계정/리전/VPC). 조치 대상 식별용.
         platform: 대상 클라우드 플랫폼("aws" | "azure").
         bad_example: 위반(취약) 설정 예시.
         good_example: 개선(안전) 설정 예시.
@@ -70,6 +71,7 @@ class Finding:
     recommendation: str
     evidence: str = ""
     resource: str = ""
+    location: str = ""           # 리소스 위치(구독/리소스그룹/리전/VPC 등) — 어디를 고쳐야 하는지
     platform: str = "azure"
     bad_example: str = ""
     good_example: str = ""

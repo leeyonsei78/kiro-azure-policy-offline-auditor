@@ -877,16 +877,70 @@ _MITRE: dict[str, tuple[str, str]] = {
 }
 
 
+def _location_from_dict(d: dict) -> str:
+    """리소스 dict에서 '어디에 있는지'(위치) 정보를 사람이 읽기 쉬운 문자열로 추출.
+
+    Azure: 구독/리소스그룹/리전, AWS: 계정/리전/VPC. 조치 대상을 특정하기 위함.
+    """
+    if not isinstance(d, dict):
+        return ""
+    parts: list[str] = []
+
+    # Azure resource ID(/subscriptions/.../resourceGroups/.../providers/...)에서 추출
+    rid = str(_val(d, "id", default="") or "")
+    m_sub = re.search(r"/subscriptions/([^/]+)", rid, re.I)
+    m_rg = re.search(r"/resourceGroups/([^/]+)", rid, re.I)
+    sub = _val(d, "subscriptionId", "subscription") or (m_sub.group(1) if m_sub else "")
+    rg = _val(d, "resourceGroup", "resourcegroup") or (m_rg.group(1) if m_rg else "")
+    loc = _val(d, "location", "region")
+    if sub:
+        parts.append(f"구독 {sub}")
+    if rg:
+        parts.append(f"리소스그룹 {rg}")
+    if loc:
+        parts.append(f"리전 {loc}")
+
+    # AWS: 계정/리전/VPC
+    acct = _val(d, "OwnerId", "ownerId", "AwsAccountId", "awsAccountId")
+    vpc = _val(d, "VpcId", "vpcId")
+    region = _val(d, "Region", "region", "AvailabilityZone", "availabilityZone")
+    arn = str(_val(d, "Arn", "arn", default="") or "")
+    m_arn = re.match(r"arn:aws:[^:]*:([^:]*):(\d+):", arn)
+    if not region and m_arn and m_arn.group(1):
+        region = m_arn.group(1)
+    if not acct and m_arn and m_arn.group(2):
+        acct = m_arn.group(2)
+    if acct:
+        parts.append(f"계정 {acct}")
+    if region:
+        parts.append(f"리전 {region}")
+    if vpc:
+        parts.append(f"VPC {vpc}")
+
+    return " > ".join(parts)
+
+
 def _finding(code: str, issue_type: str, severity: Severity, title: str,
              description: str, *, platform: str = "azure", evidence: str = "",
              resource: str = "", recommendation: str = "",
              bad_example: str = "", good_example: str = "",
-             why: str = "", how_to_fix: str = "", steps: str = "") -> Finding:
+             why: str = "", how_to_fix: str = "", steps: str = "",
+             location: str = "") -> Finding:
     kb = control_for(code, platform)
     # 이슈 유형별 맞춤 예시가 있으면 우선 사용, 없으면 통제항목 기본값.
     ex = _EXAMPLES.get(issue_type, {})
     expl = _EXPLAIN.get(issue_type, {})
     mitre = _MITRE.get(issue_type, ("", ""))
+    # location이 없으면 evidence가 JSON일 때 자동 추출(대부분의 객체 기반 탐지가 해당)
+    loc = location
+    if not loc and evidence and evidence.lstrip()[:1] in ("{", "["):
+        try:
+            parsed = json.loads(evidence)
+            if isinstance(parsed, list) and parsed:
+                parsed = parsed[0]
+            loc = _location_from_dict(parsed) if isinstance(parsed, dict) else ""
+        except (ValueError, TypeError):
+            loc = ""
     return Finding(
         control_code=code,
         control_domain=kb.get("domain", ""),
@@ -897,6 +951,7 @@ def _finding(code: str, issue_type: str, severity: Severity, title: str,
         recommendation=recommendation or kb.get("fix", ""),
         evidence=(evidence or "")[:600],
         resource=resource or "",
+        location=loc,
         platform=platform,
         bad_example=bad_example or ex.get("bad", "") or kb.get("bad_example", ""),
         good_example=good_example or ex.get("good", "") or kb.get("good_example", ""),
@@ -1055,6 +1110,15 @@ def _sql_finding(key: str, severity: Severity, findings: list[Finding],
     desc = meta.get("criteria", "")
     if extra_desc:
         desc = f"{desc} ({extra_desc})" if desc else extra_desc
+    # flat(JSON 문자열)에서 위치 정보 추출
+    loc = ""
+    try:
+        parsed = json.loads(flat) if flat and flat.lstrip()[:1] in ("{", "[") else None
+        if isinstance(parsed, list) and parsed:
+            parsed = parsed[0]
+        loc = _location_from_dict(parsed) if isinstance(parsed, dict) else ""
+    except (ValueError, TypeError):
+        loc = ""
     findings.append(Finding(
         control_code=meta.get("control_code", "2.7.1"),
         control_domain=control_for(meta.get("control_code", "2.7.1"), "azure").get("domain", ""),
@@ -1065,6 +1129,7 @@ def _sql_finding(key: str, severity: Severity, findings: list[Finding],
         recommendation=meta.get("fix", ""),
         evidence=(flat or "")[:600],
         resource=name,
+        location=loc,
         platform="azure",
         bad_example=meta.get("bad_example", ""),
         good_example=meta.get("good_example", ""),
@@ -1228,6 +1293,11 @@ def _aws_rule_ports(perm: dict) -> list[str]:
 
 def _check_aws_sg_obj(d: dict, findings: list[Finding]) -> None:
     """AWS 보안그룹(2.6.1). 0.0.0.0/0 인바운드 + 민감포트."""
+    # 그룹 레벨 위치(VpcId/OwnerId/GroupName)를 규칙별 finding에 함께 표기
+    grp_loc = _location_from_dict(d)
+    gname = str(_val(d, "GroupName", "groupName", default="") or "")
+    if gname and gname not in grp_loc:
+        grp_loc = (grp_loc + " > " if grp_loc else "") + f"SG {gname}"
     for perm, gid in _iter_aws_sg_rules(d):
         if not _aws_rule_open(perm):
             continue
@@ -1242,14 +1312,14 @@ def _check_aws_sg_obj(d: dict, findings: list[Finding]) -> None:
                 Severity.CRITICAL if worst else Severity.HIGH,
                 f"보안그룹 인바운드 전체공개 + 민감포트: {gid or '(SG미상)'}",
                 f"0.0.0.0/0(Any)에서 민감 포트 {svc} 인바운드가 허용되어 있습니다.",
-                platform="aws", evidence=flat, resource=gid,
+                platform="aws", evidence=flat, resource=gid, location=grp_loc,
             ))
         else:
             findings.append(_finding(
                 "2.6.1", "aws_sg_open_any", Severity.MEDIUM,
                 f"보안그룹 인바운드 출발지 전체공개: {gid or '(SG미상)'}",
                 "0.0.0.0/0(Any)에서 인바운드가 허용된 보안그룹 규칙이 있습니다.",
-                platform="aws", evidence=flat, resource=gid,
+                platform="aws", evidence=flat, resource=gid, location=grp_loc,
             ))
 
 
