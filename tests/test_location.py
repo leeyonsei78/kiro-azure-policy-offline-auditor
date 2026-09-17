@@ -87,5 +87,40 @@ class LocationInFindingsTest(unittest.TestCase):
         self.assertEqual(f["location"], "")
 
 
+class GroupByLocationTest(unittest.TestCase):
+    def _report(self, objs):
+        return analyze(json.dumps(objs)).to_dict()
+
+    def test_grouped_and_sorted_by_risk(self):
+        from auditor.engine import group_by_location
+        d = self._report([
+            {"name": "r1", "resourceGroup": "rg-prod",
+             "id": "/subscriptions/s1/resourceGroups/rg-prod/providers/"
+                   "Microsoft.Network/networkSecurityGroups/nsg1/securityRules/r1",
+             "sourceAddressPrefix": "*", "destinationPortRange": "3389",
+             "access": "Allow", "direction": "Inbound"},
+            {"name": "stg1", "resourceGroup": "rg-data",
+             "id": "/subscriptions/s1/resourceGroups/rg-data/providers/"
+                   "Microsoft.Storage/storageAccounts/stg1",
+             "allowBlobPublicAccess": True},
+        ])
+        groups = group_by_location(d)
+        # 위치별로 분리되고, 위험 높은 위치가 먼저
+        locs = [g["location"] for g in groups]
+        self.assertTrue(any("rg-prod" in x for x in locs))
+        self.assertTrue(any("rg-data" in x for x in locs))
+        self.assertGreaterEqual(groups[0]["max_risk"], groups[-1]["max_risk"])
+
+    def test_each_group_has_count_and_findings(self):
+        from auditor.engine import group_by_location
+        d = self._report([{"name": "stg1", "resourceGroup": "rg-x",
+                           "id": "/subscriptions/s/resourceGroups/rg-x/providers/"
+                                 "Microsoft.Storage/storageAccounts/stg1",
+                           "allowBlobPublicAccess": True}])
+        g = group_by_location(d)[0]
+        self.assertEqual(g["count"], len(g["findings"]))
+        self.assertGreaterEqual(g["count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

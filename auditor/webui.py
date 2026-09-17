@@ -109,6 +109,7 @@ INDEX_HTML = """<!DOCTYPE html>
   .trfac{ font-size:11px; color:var(--muted); background:#0b1220; padding:2px 6px; border-radius:5px; }
   .mitre{ display:inline-block; font-size:11px; font-weight:700; color:#c39bff; background:#241a38; border:1px solid #4b3a6b; padding:1px 7px; border-radius:4px; margin-right:6px; }
   .loc{ font-size:12px; color:#bfe3ff; background:#0e2233; border-left:3px solid #2f6f9f; border-radius:5px; padding:4px 9px; margin-top:4px; }
+  .rsbadge{ font-size:11px; font-weight:700; color:#04121f; background:#ffd166; padding:1px 7px; border-radius:4px; }
   .trendbar{ display:flex; gap:8px; flex-wrap:wrap; margin:6px 0; }
   .tb{ font-size:13px; font-weight:700; padding:4px 10px; border-radius:8px; border:1px solid var(--border); }
   .tb-new{ background:#2a1518; color:#ff9b9b; }
@@ -182,6 +183,12 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="counts" id="counts"></div>
         <div class="hint" id="meta"></div>
         <div class="row" id="plat-filter" style="display:none;margin-top:8px"></div>
+        <div class="row" id="view-mode" style="margin-top:6px">
+          <span class="hint" style="margin-right:6px">보기:</span>
+          <button class="btn" data-v="control" onclick="setViewMode('control')">📋 통제항목별</button>
+          <button class="btn" data-v="location" onclick="setViewMode('location')">📍 위치별</button>
+          <button class="btn" data-v="risk" onclick="setViewMode('risk')">🎯 위험점수순</button>
+        </div>
       </div>
     </div>
     <div class="row" style="margin-top:12px">
@@ -389,8 +396,16 @@ async function runAudit(){
 }
 var LAST_REPORT=null;
 var PLAT_FILTER='all';
+var VIEW_MODE='control'; // 'control'=통제항목별, 'location'=위치별, 'risk'=위험점수순
 function platLabel(p){ return p==='aws'?'AWS':(p==='azure'?'Azure':(p||'').toUpperCase()); }
 function setPlatFilter(p){ PLAT_FILTER=p; renderFindings(LAST_REPORT); updateFilterButtons(); }
+function setViewMode(m){ VIEW_MODE=m; renderFindings(LAST_REPORT); updateViewButtons(); }
+function updateViewButtons(){
+  var wrap=document.getElementById('view-mode'); if(!wrap) return;
+  Array.prototype.forEach.call(wrap.querySelectorAll('button'), function(b){
+    b.style.opacity = (b.getAttribute('data-v')===VIEW_MODE)?'1':'0.5';
+  });
+}
 function updateFilterButtons(){
   var wrap=document.getElementById('plat-filter'); if(!wrap) return;
   Array.prototype.forEach.call(wrap.querySelectorAll('button'), function(b){
@@ -424,6 +439,7 @@ function render(r){
   renderSummary(r);
   renderFindings(r);
   updateFilterButtons();
+  updateViewButtons();
 }
 // ── 추세 비교(이전 점검 대비) : 브라우저 localStorage에 이전 결과 저장 ──
 var TREND_KEY='auditor_prev_findings_v1';
@@ -529,27 +545,52 @@ function _renderFindings(r){
     return;
   }
   var items=r.findings.filter(function(f){ return PLAT_FILTER==='all' || f.platform===PLAT_FILTER; });
-  // (통제항목, 플랫폼)별 그룹
+  // VIEW_MODE에 따라 그룹핑
   var groups={}; var keyOrder=[];
   items.forEach(function(f){
-    var key=f.control_code+'|'+f.platform;
+    var key;
+    if(VIEW_MODE==='location'){
+      key=f.location || '(위치 미상)';
+    } else if(VIEW_MODE==='risk'){
+      key='_risk'; // 단일 그룹(위험점수순 정렬)
+    } else {
+      key=f.control_code+'|'+f.platform;
+    }
     if(!groups[key]){ groups[key]=[]; keyOrder.push(key); }
     groups[key].push(f);
   });
-  keyOrder.sort(function(a,b){
-    var ca=a.split('|')[0].split('.').map(Number), cb=b.split('|')[0].split('.').map(Number);
-    for(var i=0;i<3;i++){ if((ca[i]||0)!==(cb[i]||0)) return (ca[i]||0)-(cb[i]||0); }
-    return a.split('|')[1].localeCompare(b.split('|')[1]);
-  });
+  if(VIEW_MODE==='control'){
+    keyOrder.sort(function(a,b){
+      var ca=a.split('|')[0].split('.').map(Number), cb=b.split('|')[0].split('.').map(Number);
+      for(var i=0;i<3;i++){ if((ca[i]||0)!==(cb[i]||0)) return (ca[i]||0)-(cb[i]||0); }
+      return a.split('|')[1].localeCompare(b.split('|')[1]);
+    });
+  } else if(VIEW_MODE==='location'){
+    keyOrder.sort();
+  }
+  // 위험점수순이면 각 그룹 안도 점수순 정렬
+  if(VIEW_MODE==='risk'){
+    keyOrder.forEach(function(k){ groups[k].sort(function(a,b){ return (b.risk_score||0)-(a.risk_score||0); }); });
+  }
   var html='';
   keyOrder.forEach(function(key){
-    var fs=groups[key]; var code=key.split('|')[0]; var plat=fs[0].platform;
-    var pcolor=plat==='aws'?'#ff9900':'#4da3ff';
-    html+='<div class="sec"><span class="platbadge" style="background:'+pcolor+'">'+platLabel(plat)+'</span> ['+esc(code)+'] '+esc(fs[0].control_domain||'')+' — '+fs.length+'건</div>';
+    var fs=groups[key];
+    // 섹션 헤더
+    if(VIEW_MODE==='location'){
+      html+='<div class="sec">📍 '+esc(key)+' — '+fs.length+'건</div>';
+    } else if(VIEW_MODE==='risk'){
+      html+='<div class="sec">🎯 전체 이슈 (위험 점수순) — '+fs.length+'건</div>';
+    } else {
+      var code=key.split('|')[0]; var plat=fs[0].platform;
+      var pcolor=plat==='aws'?'#ff9900':'#4da3ff';
+      html+='<div class="sec"><span class="platbadge" style="background:'+pcolor+'">'+platLabel(plat)+'</span> ['+esc(code)+'] '+esc(fs[0].control_domain||'')+' — '+fs.length+'건</div>';
+    }
     fs.forEach(function(f){
+      var fpc=f.platform==='aws'?'#ff9900':'#4da3ff';
       html+='<div class="finding"><div class="ftop">'+
         '<span class="sev '+esc(f.severity)+'">'+esc(f.severity)+'</span>'+
-        '<span class="platbadge" style="background:'+pcolor+'">'+platLabel(f.platform)+'</span>'+
+        (typeof f.risk_score==='number' ? '<span class="rsbadge">위험 '+f.risk_score+'</span>' : '')+
+        '<span class="platbadge" style="background:'+fpc+'">'+platLabel(f.platform)+'</span>'+
         '<span class="code">'+esc(f.control_code)+'</span>'+
         '<span class="ftitle">'+esc(f.title)+'</span></div>';
       if(f.resource) html+='<div class="meta"><b>대상:</b> '+esc(f.resource)+'</div>';

@@ -69,6 +69,16 @@ def format_text(report: AuditReport) -> str:
             fac = (" — " + " · ".join(t["risk_factors"])) if t.get("risk_factors") else ""
             lines.append(f"  {i}. [{t['risk_score']}점][{t['severity']}][{_plat_label(t['platform'])}] {t['title']}{fac}")
         lines.append("")
+    # ── 위치별 이슈 요약(어느 위치를 먼저 조치할지) ──
+    from .engine import group_by_location
+    loc_groups = [g for g in group_by_location(d) if g["location"] != "(위치 미상)"]
+    if loc_groups:
+        lines.append("-" * 64)
+        lines.append(" [위치별 이슈 요약] 위험 높은 위치 순")
+        lines.append("-" * 64)
+        for g in loc_groups:
+            lines.append(f"  📍 {g['location']} — {g['count']}건 (최고 위험 {g['max_risk']}점)")
+        lines.append("")
 
     # (통제코드, 플랫폼)별 그룹 — 같은 코드라도 AWS/Azure를 분리 표기
     by_key: dict[tuple, list] = {}

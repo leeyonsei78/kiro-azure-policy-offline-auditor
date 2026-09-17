@@ -2045,6 +2045,27 @@ def analyze(text: str) -> AuditReport:
     return report
 
 
+def group_by_location(report_dict: dict) -> list[dict]:
+    """이슈를 위치(구독/리소스그룹/VPC 등)별로 묶어 반환.
+
+    반환: [{location, count, findings:[...]}, ...] — 위치명 정렬.
+    조치 담당자가 '어느 위치를 먼저 손봐야 하는지' 한눈에 보기 위함.
+    """
+    buckets: dict[str, list] = {}
+    for f in report_dict.get("findings", []):
+        loc = f.get("location") or "(위치 미상)"
+        buckets.setdefault(loc, []).append(f)
+    out = []
+    for loc in sorted(buckets):
+        fs = buckets[loc]
+        # 그룹 대표 위험도 = 그룹 내 최고 위험 점수
+        top = max((x.get("risk_score", 0) for x in fs), default=0)
+        out.append({"location": loc, "count": len(fs), "max_risk": top, "findings": fs})
+    # 위험 높은 위치가 위로
+    out.sort(key=lambda g: g["max_risk"], reverse=True)
+    return out
+
+
 def _finding_key(f: dict) -> str:
     """추세 비교용 이슈 고유키(플랫폼|통제코드|이슈유형|리소스)."""
     return "|".join([
