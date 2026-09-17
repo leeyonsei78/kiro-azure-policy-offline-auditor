@@ -110,6 +110,19 @@ INDEX_HTML = """<!DOCTYPE html>
   .mitre{ display:inline-block; font-size:11px; font-weight:700; color:#c39bff; background:#241a38; border:1px solid #4b3a6b; padding:1px 7px; border-radius:4px; margin-right:6px; }
   .loc{ font-size:12px; color:#bfe3ff; background:#0e2233; border-left:3px solid #2f6f9f; border-radius:5px; padding:4px 9px; margin-top:4px; }
   .rsbadge{ font-size:11px; font-weight:700; color:#04121f; background:#ffd166; padding:1px 7px; border-radius:4px; }
+  .statgrid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; margin:6px 0; }
+  .statcard{ background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:12px; }
+  .statt{ font-size:13px; font-weight:700; color:#cfe3ff; margin-bottom:8px; }
+  .donutwrap{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .legend{ display:flex; flex-direction:column; gap:3px; }
+  .legend .lg{ font-size:12px; color:var(--muted); }
+  .legend .lg i{ display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+  .hbars{ display:flex; flex-direction:column; gap:5px; }
+  .hbrow{ display:flex; align-items:center; gap:8px; font-size:12px; }
+  .hblabel{ width:120px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .hbtrack{ flex:1; background:#0b1220; border-radius:5px; height:14px; overflow:hidden; }
+  .hbfill{ display:block; height:100%; border-radius:5px; }
+  .hbval{ width:28px; text-align:right; font-weight:700; }
   .trendbar{ display:flex; gap:8px; flex-wrap:wrap; margin:6px 0; }
   .tb{ font-size:13px; font-weight:700; padding:4px 10px; border-radius:8px; border:1px solid var(--border); }
   .tb-new{ background:#2a1518; color:#ff9b9b; }
@@ -197,6 +210,7 @@ INDEX_HTML = """<!DOCTYPE html>
       <button class="btn" onclick="openPdf()">🖨️ PDF로 저장 (인쇄)</button>
       <span class="hint">엑셀(.xlsx)은 줄바꿈·특수문자가 그대로 보존됩니다(권장). PDF는 새 창의 인쇄 대화상자에서 "PDF로 저장"을 선택하세요.</span>
     </div>
+    <div id="stats"></div>
     <div id="trend"></div>
     <div id="summary"></div>
     <div id="findings"></div>
@@ -321,7 +335,7 @@ function fallbackCopy(text){
   try{ document.execCommand('copy'); }catch(e){}
   document.body.removeChild(ta);
 }
-function clearAll(){ document.getElementById('input').value=''; document.getElementById('result-card').style.display='none'; document.getElementById('err').textContent=''; LOADED_FILENAME=''; var m=document.getElementById('load-info'); if(m) m.textContent=''; var s=document.getElementById('summary'); if(s) s.innerHTML=''; var tr=document.getElementById('trend'); if(tr) tr.innerHTML=''; }
+function clearAll(){ document.getElementById('input').value=''; document.getElementById('result-card').style.display='none'; document.getElementById('err').textContent=''; LOADED_FILENAME=''; var m=document.getElementById('load-info'); if(m) m.textContent=''; var s=document.getElementById('summary'); if(s) s.innerHTML=''; var tr=document.getElementById('trend'); if(tr) tr.innerHTML=''; var stt=document.getElementById('stats'); if(stt) stt.innerHTML=''; }
 function loadFile(){
   var f=document.getElementById('file').files[0];
   var meta=document.getElementById('load-info');
@@ -435,11 +449,71 @@ function render(r){
       plats.map(function(p){ return '<button class="btn" data-p="'+p+'" onclick="setPlatFilter(\\''+p+'\\')">'+platLabel(p)+'</button>'; }).join('');
   } else { fbar.style.display='none'; fbar.innerHTML=''; }
 
+  renderStats(r);
   renderTrend(r);
   renderSummary(r);
   renderFindings(r);
   updateFilterButtons();
   updateViewButtons();
+}
+// ── 발표용 통계 차트(순수 SVG, 외부 라이브러리 불필요) ──
+var _SEVCOLOR={CRITICAL:'#e05563',HIGH:'#ff9a3d',MEDIUM:'#ffd166',LOW:'#4da3ff',INFO:'#8a9084'};
+var _BARCOLORS=['#4da3ff','#ff9900','#37d67a','#c39bff','#ffd166','#e05563','#5bc0de','#a0a0a0'];
+function _donutSVG(items, size){
+  var total=items.reduce(function(s,x){return s+x.value;},0);
+  if(!total) return '';
+  var cx=size/2, cy=size/2, r=size/2-6, C=2*Math.PI*r, off=0;
+  var segs='';
+  items.forEach(function(it,i){
+    var frac=it.value/total; var len=frac*C;
+    var col=_SEVCOLOR[it.label]||_BARCOLORS[i%_BARCOLORS.length];
+    segs+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+col+'" stroke-width="12" '+
+      'stroke-dasharray="'+len.toFixed(2)+' '+(C-len).toFixed(2)+'" stroke-dashoffset="'+(-off).toFixed(2)+'" transform="rotate(-90 '+cx+' '+cy+')"></circle>';
+    off+=len;
+  });
+  return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'">'+segs+
+    '<text x="'+cx+'" y="'+(cy-2)+'" text-anchor="middle" font-size="22" font-weight="700" fill="#e8eef2">'+total+'</text>'+
+    '<text x="'+cx+'" y="'+(cy+16)+'" text-anchor="middle" font-size="11" fill="#8a9084">건</text></svg>';
+}
+function _legend(items){
+  return '<div class="legend">'+items.map(function(it,i){
+    var col=_SEVCOLOR[it.label]||_BARCOLORS[i%_BARCOLORS.length];
+    return '<span class="lg"><i style="background:'+col+'"></i>'+esc(it.label)+' '+it.value+'</span>';
+  }).join('')+'</div>';
+}
+function _hbars(items){
+  var max=items.reduce(function(m,x){return Math.max(m,x.value);},0)||1;
+  return '<div class="hbars">'+items.map(function(it,i){
+    var w=Math.round(it.value/max*100);
+    var col=_BARCOLORS[i%_BARCOLORS.length];
+    return '<div class="hbrow"><span class="hblabel" title="'+esc(it.label)+'">'+esc(it.label)+'</span>'+
+      '<span class="hbtrack"><span class="hbfill" style="width:'+w+'%;background:'+col+'"></span></span>'+
+      '<span class="hbval">'+it.value+'</span></div>';
+  }).join('')+'</div>';
+}
+function renderStats(r){
+  var host=document.getElementById('stats'); if(!host) return;
+  var st=r.statistics;
+  if(!st || !st.total){ host.innerHTML=''; return; }
+  function card(title, body){ return '<div class="statcard"><div class="statt">'+title+'</div>'+body+'</div>'; }
+  var html='<div class="sec">📊 통계 요약 (발표용)</div><div class="statgrid">';
+  // 심각도 도넛
+  if(st.severity && st.severity.length)
+    html+=card('심각도 분포', '<div class="donutwrap">'+_donutSVG(st.severity,120)+_legend(st.severity)+'</div>');
+  // 플랫폼 도넛
+  if(st.platform && st.platform.length>0)
+    html+=card('플랫폼별', '<div class="donutwrap">'+_donutSVG(st.platform,120)+_legend(st.platform)+'</div>');
+  // 영역별 막대
+  if(st.domain && st.domain.length)
+    html+=card('ISMS-P 영역별', _hbars(st.domain));
+  // 위치별 막대
+  if(st.location && st.location.length)
+    html+=card('위치별 TOP', _hbars(st.location));
+  // MITRE 막대
+  if(st.mitre && st.mitre.length)
+    html+=card('MITRE ATT&CK 기법별', _hbars(st.mitre));
+  html+='</div>';
+  host.innerHTML=html;
 }
 // ── 추세 비교(이전 점검 대비) : 브라우저 localStorage에 이전 결과 저장 ──
 var TREND_KEY='auditor_prev_findings_v1';
@@ -841,7 +915,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": err}, status=413)
                 return
             report = analyze(payload.get("text", ""))
-            self._send_json({"ok": True, "report": report.to_dict()})
+            rd = report.to_dict()
+            from .engine import build_statistics
+            rd["statistics"] = build_statistics(rd)
+            self._send_json({"ok": True, "report": rd})
         except Exception as e:  # noqa: BLE001 - UI에 오류 전달
             logger.exception("audit 실패")
             self._send_json({"ok": False, "error": str(e)}, status=500)

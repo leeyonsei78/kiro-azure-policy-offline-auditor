@@ -194,6 +194,84 @@ _SEV_COLOR = {
 }
 _PLAT_COLOR = {"aws": "#ff9900", "azure": "#0078d4"}
 
+_BAR_COLORS = ["#2980b9", "#ff9900", "#27ae60", "#8e44ad", "#c9a227", "#c0392b", "#16a2b8", "#7f8c8d"]
+
+
+def _svg_donut(items, size=130):
+    """인쇄용 SVG 도넛 차트(외부 라이브러리 불필요)."""
+    total = sum(x["value"] for x in items)
+    if not total:
+        return ""
+    import math
+    cx = cy = size / 2
+    r = size / 2 - 8
+    circ = 2 * math.pi * r
+    off = 0.0
+    segs = []
+    for i, it in enumerate(items):
+        length = it["value"] / total * circ
+        col = _SEV_COLOR.get(it["label"], _BAR_COLORS[i % len(_BAR_COLORS)])
+        segs.append(
+            f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{col}" stroke-width="13" '
+            f'stroke-dasharray="{length:.2f} {circ - length:.2f}" stroke-dashoffset="{-off:.2f}" '
+            f'transform="rotate(-90 {cx} {cy})"></circle>'
+        )
+        off += length
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">' + "".join(segs)
+        + f'<text x="{cx}" y="{cy - 2}" text-anchor="middle" font-size="22" font-weight="700" fill="#222">{total}</text>'
+        + f'<text x="{cx}" y="{cy + 16}" text-anchor="middle" font-size="11" fill="#777">건</text></svg>'
+    )
+
+
+def _svg_legend(items):
+    out = ["<div class='clegend'>"]
+    for i, it in enumerate(items):
+        col = _SEV_COLOR.get(it["label"], _BAR_COLORS[i % len(_BAR_COLORS)])
+        out.append(f"<span class='clg'><i style='background:{col}'></i>{_esc(it['label'])} {it['value']}</span>")
+    out.append("</div>")
+    return "".join(out)
+
+
+def _html_hbars(items):
+    mx = max((x["value"] for x in items), default=1) or 1
+    rows = []
+    for i, it in enumerate(items):
+        w = round(it["value"] / mx * 100)
+        col = _BAR_COLORS[i % len(_BAR_COLORS)]
+        rows.append(
+            f"<div class='chbrow'><span class='chblabel' title='{_esc(it['label'])}'>{_esc(it['label'])}</span>"
+            f"<span class='chbtrack'><span class='chbfill' style='width:{w}%;background:{col}'></span></span>"
+            f"<span class='chbval'>{it['value']}</span></div>"
+        )
+    return "<div class='chbars'>" + "".join(rows) + "</div>"
+
+
+def _stats_html(stats: dict) -> str:
+    """발표용 통계 차트 블록(도넛 + 가로막대)."""
+    if not stats or not stats.get("total"):
+        return ""
+
+    def card(title, body):
+        return f"<div class='statcard'><div class='statt'>{_esc(title)}</div>{body}</div>"
+
+    parts = []
+    if stats.get("severity"):
+        parts.append(card("심각도 분포",
+                           f"<div class='donutwrap'>{_svg_donut(stats['severity'])}{_svg_legend(stats['severity'])}</div>"))
+    if stats.get("platform"):
+        parts.append(card("플랫폼별",
+                           f"<div class='donutwrap'>{_svg_donut(stats['platform'])}{_svg_legend(stats['platform'])}</div>"))
+    if stats.get("domain"):
+        parts.append(card("ISMS-P 영역별", _html_hbars(stats["domain"])))
+    if stats.get("location"):
+        parts.append(card("위치별 TOP", _html_hbars(stats["location"])))
+    if stats.get("mitre"):
+        parts.append(card("MITRE ATT&CK 기법별", _html_hbars(stats["mitre"])))
+    if not parts:
+        return ""
+    return "<h2>📊 통계 요약 (발표용)</h2><div class='statgrid'>" + "".join(parts) + "</div>"
+
 
 def format_html(report: AuditReport) -> str:
     """인쇄(PDF 저장)용 자체완결형 HTML 리포트."""
@@ -264,6 +342,10 @@ def format_html(report: AuditReport) -> str:
     )
     plat_meta = f" · 플랫폼: {_esc(psum)}" if psum else ""
 
+    # 발표용 통계 차트
+    from .engine import build_statistics
+    stats_html = _stats_html(d.get("statistics") or build_statistics(d))
+
     # 경영진용 요약: 복합 위험 + 조치 우선순위 TOP
     summary_html = ""
     corr = d.get("correlations", [])
@@ -319,6 +401,19 @@ def format_html(report: AuditReport) -> str:
   table.toprisk th,table.toprisk td{{ border:1px solid #ccc; padding:4px 8px; text-align:left; }}
   table.toprisk th{{ background:#f0f0f0; }}
   table.toprisk .fac{{ color:#777; font-size:11px; }}
+  .statgrid{{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px; margin:6px 0 14px; }}
+  .statcard{{ border:1px solid #ddd; border-radius:8px; padding:10px 12px; page-break-inside:avoid; }}
+  .statt{{ font-size:12px; font-weight:700; color:#333; margin-bottom:6px; }}
+  .donutwrap{{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }}
+  .clegend{{ display:flex; flex-direction:column; gap:2px; }}
+  .clg{{ font-size:11px; color:#555; }}
+  .clg i{{ display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:middle; }}
+  .chbars{{ display:flex; flex-direction:column; gap:4px; }}
+  .chbrow{{ display:flex; align-items:center; gap:6px; font-size:11px; }}
+  .chblabel{{ width:110px; color:#555; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+  .chbtrack{{ flex:1; background:#eee; border-radius:4px; height:13px; overflow:hidden; }}
+  .chbfill{{ display:block; height:100%; border-radius:4px; }}
+  .chbval{{ width:26px; text-align:right; font-weight:700; }}
   .ex{{ margin-top:4px; padding:4px 8px; border-radius:4px; font-size:12px; }}
   .ex code{{ font-family:Consolas,monospace; word-break:break-all; }}
   .ex.bad{{ background:#fdecea; border-left:3px solid #c0392b; }}
@@ -337,6 +432,7 @@ def format_html(report: AuditReport) -> str:
   <div class="meta">기준: ISMS-P 클라우드 인프라 통제항목 (AWS/Azure) · 오프라인 규칙 기반 자동 검토</div>
   <div class="scorebox"><span class="score">{d['score']}</span> / 100점 &nbsp; 등급 <b>{_esc(d['grade'])}</b></div>
   <div class="meta">입력형식: {_esc(d['input_kind'])} · 파싱 리소스 {d['parsed_resources']}개 · 발견 이슈 {d['total_findings']}건 ({_esc(csum)}){plat_meta}</div>
+  {stats_html}
   {summary_html}
   {body_sections}
   <div class="foot">※ 본 리포트는 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.</div>

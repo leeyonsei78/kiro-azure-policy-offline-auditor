@@ -2066,6 +2066,50 @@ def group_by_location(report_dict: dict) -> list[dict]:
     return out
 
 
+_SEV_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+
+
+def build_statistics(report_dict: dict) -> dict:
+    """발표용 통계 집계. 화면·리포트가 SVG/CSS 차트로 그린다(외부 라이브러리 불필요).
+
+    반환 각 항목: [{"label","value","key?"}] 형태(값 큰 순, 상위 N 제한).
+    - severity: 심각도 분포
+    - platform: 플랫폼(AWS/Azure)별
+    - domain:  ISMS-P 영역(통제항목)별
+    - location: 위치(리소스그룹/VPC 등)별 TOP
+    - mitre:   MITRE ATT&CK 기법별
+    """
+    findings = report_dict.get("findings", [])
+
+    def _count(key_fn, top=None, keep_order=None):
+        acc: dict[str, int] = {}
+        for f in findings:
+            k = key_fn(f)
+            if not k:
+                continue
+            acc[k] = acc.get(k, 0) + 1
+        items = [{"label": k, "value": v} for k, v in acc.items()]
+        if keep_order:
+            items.sort(key=lambda x: keep_order.index(x["label"])
+                       if x["label"] in keep_order else 999)
+        else:
+            items.sort(key=lambda x: x["value"], reverse=True)
+        if top:
+            items = items[:top]
+        return items
+
+    return {
+        "total": len(findings),
+        "severity": _count(lambda f: f.get("severity", ""), keep_order=_SEV_ORDER),
+        "platform": _count(lambda f: {"aws": "AWS", "azure": "Azure"}.get(f.get("platform", ""),
+                                                                          f.get("platform", ""))),
+        "domain": _count(lambda f: f.get("control_domain", ""), top=8),
+        "location": _count(lambda f: f.get("location", ""), top=8),
+        "mitre": _count(lambda f: (f.get("mitre_id", "") + " " + f.get("mitre_name", "")).strip()
+                        if f.get("mitre_id") else "", top=8),
+    }
+
+
 def _finding_key(f: dict) -> str:
     """추세 비교용 이슈 고유키(플랫폼|통제코드|이슈유형|리소스)."""
     return "|".join([
