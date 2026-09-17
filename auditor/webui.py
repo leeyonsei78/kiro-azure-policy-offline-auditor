@@ -107,6 +107,16 @@ INDEX_HTML = """<!DOCTYPE html>
   .trscore{ font-weight:700; color:#ffd166; min-width:44px; }
   .trtitle{ flex:1; font-size:13px; }
   .trfac{ font-size:11px; color:var(--muted); background:#0b1220; padding:2px 6px; border-radius:5px; }
+  .mitre{ display:inline-block; font-size:11px; font-weight:700; color:#c39bff; background:#241a38; border:1px solid #4b3a6b; padding:1px 7px; border-radius:4px; margin-right:6px; }
+  .trendbar{ display:flex; gap:8px; flex-wrap:wrap; margin:6px 0; }
+  .tb{ font-size:13px; font-weight:700; padding:4px 10px; border-radius:8px; border:1px solid var(--border); }
+  .tb-new{ background:#2a1518; color:#ff9b9b; }
+  .tb-res{ background:#0f2418; color:#8fe6b0; }
+  .tb-keep{ background:#12233a; color:#cfe3ff; }
+  .tb-score{ background:#241a38; color:#e0c8ff; }
+  .tritem{ font-size:12px; padding:3px 8px; margin:2px 0; border-radius:5px; }
+  .tri-new{ background:#2a1518; }
+  .tri-res{ background:#0f2418; }
   .evlabel{ margin-top:8px; font-size:12px; color:var(--muted); }
   .exbad{ margin-top:6px; padding:6px 10px; background:#2a1518; border-left:3px solid var(--crit); border-radius:6px; font-size:12px; }
   .exgood{ margin-top:6px; padding:6px 10px; background:#0f2418; border-left:3px solid #37d67a; border-radius:6px; font-size:12px; }
@@ -177,6 +187,7 @@ INDEX_HTML = """<!DOCTYPE html>
       <button class="btn" onclick="openPdf()">🖨️ PDF로 저장 (인쇄)</button>
       <span class="hint">엑셀(.xlsx)은 줄바꿈·특수문자가 그대로 보존됩니다(권장). PDF는 새 창의 인쇄 대화상자에서 "PDF로 저장"을 선택하세요.</span>
     </div>
+    <div id="trend"></div>
     <div id="summary"></div>
     <div id="findings"></div>
     <div class="hint" style="margin-top:14px">※ 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.</div>
@@ -295,7 +306,7 @@ function fallbackCopy(text){
   try{ document.execCommand('copy'); }catch(e){}
   document.body.removeChild(ta);
 }
-function clearAll(){ document.getElementById('input').value=''; document.getElementById('result-card').style.display='none'; document.getElementById('err').textContent=''; LOADED_FILENAME=''; var m=document.getElementById('load-info'); if(m) m.textContent=''; var s=document.getElementById('summary'); if(s) s.innerHTML=''; }
+function clearAll(){ document.getElementById('input').value=''; document.getElementById('result-card').style.display='none'; document.getElementById('err').textContent=''; LOADED_FILENAME=''; var m=document.getElementById('load-info'); if(m) m.textContent=''; var s=document.getElementById('summary'); if(s) s.innerHTML=''; var tr=document.getElementById('trend'); if(tr) tr.innerHTML=''; }
 function loadFile(){
   var f=document.getElementById('file').files[0];
   var meta=document.getElementById('load-info');
@@ -401,9 +412,66 @@ function render(r){
       plats.map(function(p){ return '<button class="btn" data-p="'+p+'" onclick="setPlatFilter(\\''+p+'\\')">'+platLabel(p)+'</button>'; }).join('');
   } else { fbar.style.display='none'; fbar.innerHTML=''; }
 
+  renderTrend(r);
   renderSummary(r);
   renderFindings(r);
   updateFilterButtons();
+}
+// ── 추세 비교(이전 점검 대비) : 브라우저 localStorage에 이전 결과 저장 ──
+var TREND_KEY='auditor_prev_findings_v1';
+function _findingKey(f){ return f.platform+'|'+f.control_code+'|'+f.issue_type+'|'+(f.resource||''); }
+function _snapshot(r){
+  // 비교에 필요한 최소 정보만 저장
+  var m={}; (r.findings||[]).forEach(function(f){ m[_findingKey(f)]={title:f.title,severity:f.severity,platform:f.platform}; });
+  return {ts:new Date().toISOString(), score:r.score, grade:r.grade, total:r.total_findings, items:m};
+}
+function renderTrend(r){
+  var host=document.getElementById('trend'); if(!host) return;
+  var prevRaw=null;
+  try{ prevRaw=localStorage.getItem(TREND_KEY); }catch(e){ prevRaw=null; }
+  var html='';
+  if(prevRaw){
+    var prev=null; try{ prev=JSON.parse(prevRaw); }catch(e){ prev=null; }
+    if(prev && prev.items){
+      var cur={}; (r.findings||[]).forEach(function(f){ cur[_findingKey(f)]=f; });
+      var added=[], resolved=[], kept=0;
+      Object.keys(cur).forEach(function(k){ if(!(k in prev.items)) added.push(cur[k]); else kept++; });
+      Object.keys(prev.items).forEach(function(k){ if(!(k in cur)) resolved.push(prev.items[k]); });
+      var when = prev.ts ? prev.ts.replace('T',' ').substring(0,16) : '이전';
+      var scoreDelta = (typeof prev.score==='number') ? (r.score - prev.score) : null;
+      var deltaTxt = scoreDelta===null ? '' :
+        (scoreDelta>0 ? ' (▲ +'+scoreDelta+'점 개선)' : (scoreDelta<0 ? ' (▼ '+scoreDelta+'점 악화)' : ' (변화 없음)'));
+      html+='<div class="sec">📈 이전 점검 대비 변화 <span class="hint">(기준: '+esc(when)+')</span></div>';
+      html+='<div class="trendbar">'+
+        '<span class="tb tb-new">🆕 신규 '+added.length+'건</span>'+
+        '<span class="tb tb-res">✅ 해결 '+resolved.length+'건</span>'+
+        '<span class="tb tb-keep">➖ 유지 '+kept+'건</span>'+
+        '<span class="tb tb-score">점수 '+r.score+deltaTxt+'</span></div>';
+      if(added.length){
+        html+='<div class="meta" style="margin-top:6px"><b>신규 발생:</b></div>';
+        added.slice(0,10).forEach(function(f){ html+='<div class="tritem tri-new">🆕 ['+esc(f.severity)+'] '+esc(f.title)+'</div>'; });
+        if(added.length>10) html+='<div class="hint">…외 '+(added.length-10)+'건</div>';
+      }
+      if(resolved.length){
+        html+='<div class="meta" style="margin-top:6px"><b>해결됨:</b></div>';
+        resolved.slice(0,10).forEach(function(f){ html+='<div class="tritem tri-res">✅ '+esc(f.title)+'</div>'; });
+        if(resolved.length>10) html+='<div class="hint">…외 '+(resolved.length-10)+'건</div>';
+      }
+      html+='<div class="row" style="margin-top:6px"><button class="btn" onclick="clearTrend()">이전 기준 지우기</button>'+
+        '<span class="hint">지금 결과가 다음 비교의 기준으로 저장됩니다(이 브라우저에만 보관).</span></div>';
+    }
+  } else {
+    html='<div class="sec">📈 이전 점검 대비 변화</div>'+
+      '<div class="hint">이전 점검 기록이 없습니다. 이번 결과를 기준으로 저장했으니, 다음 점검 때 신규/해결 이슈를 비교해 보여줍니다.</div>';
+  }
+  host.innerHTML=html;
+  // 현재 결과를 다음 비교 기준으로 저장
+  try{ localStorage.setItem(TREND_KEY, JSON.stringify(_snapshot(r))); }catch(e){}
+}
+function clearTrend(){
+  try{ localStorage.removeItem(TREND_KEY); }catch(e){}
+  var host=document.getElementById('trend');
+  if(host) host.innerHTML='<div class="hint">이전 기준을 지웠습니다. 다음 점검부터 새로 비교합니다.</div>';
 }
 function renderSummary(r){
   var host=document.getElementById('summary'); if(!host) return;
@@ -477,6 +545,7 @@ function _renderFindings(r){
         '<span class="code">'+esc(f.control_code)+'</span>'+
         '<span class="ftitle">'+esc(f.title)+'</span></div>';
       if(f.resource) html+='<div class="meta"><b>대상:</b> '+esc(f.resource)+'</div>';
+      if(f.mitre_id) html+='<div class="meta"><span class="mitre">ATT&CK '+esc(f.mitre_id)+'</span> '+esc(f.mitre_name)+'</div>';
       html+='<div class="meta"><b>문제:</b> '+esc(f.description)+'</div>';
       if(f.why) html+='<div class="why"><b>❓ 왜 문제인가요?</b><br>'+nl2br(esc(f.why))+'</div>';
       html+='<div class="fix"><b>✅ 개선 제안:</b> '+esc(f.recommendation)+'</div>';

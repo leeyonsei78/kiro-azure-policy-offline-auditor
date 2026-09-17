@@ -115,12 +115,12 @@ CONTROLS: list[dict] = [
             "nsg"
         ],
         "azure": {
-            "cmd": "az network nsg list -o table\naz network nsg rule list --nsg-name NSG_NAME -g RESOURCE_GROUP --query \"[?sourceAddressPrefix=='*']\"\naz network nsg rule list --nsg-name NSG_NAME -g RESOURCE_GROUP --query \"[?direction=='Inbound' && access=='Allow' && (sourceAddressPrefix=='*' || sourceAddressPrefix=='0.0.0.0/0' || sourceAddressPrefix=='Internet') && (destinationPortRange=='22' || contains(destinationPortRanges, '22'))]\"\naz network nsg rule list --nsg-name NSG_NAME -g RESOURCE_GROUP --query \"[?direction=='Inbound' && access=='Allow' && (sourceAddressPrefix=='*' || sourceAddressPrefix=='0.0.0.0/0' || sourceAddressPrefix=='Internet') && (destinationPortRange=='3389' || contains(destinationPortRanges, '3389'))]\"",
+            "cmd": "az network nsg list -o table\naz network nsg rule list --nsg-name NSG_NAME -g RESOURCE_GROUP --query \"[?sourceAddressPrefix=='*']\"\naz network nsg rule list --nsg-name NSG_NAME -g RESOURCE_GROUP --query \"[?direction=='Inbound' && access=='Allow' && (sourceAddressPrefix=='*' || sourceAddressPrefix=='0.0.0.0/0' || sourceAddressPrefix=='Internet') && (destinationPortRange=='22' || contains(destinationPortRanges, '22'))]\"\naz network nsg rule list --nsg-name NSG_NAME -g RESOURCE_GROUP --query \"[?direction=='Inbound' && access=='Allow' && (sourceAddressPrefix=='*' || sourceAddressPrefix=='0.0.0.0/0' || sourceAddressPrefix=='Internet') && (destinationPortRange=='3389' || contains(destinationPortRanges, '3389'))]\"\naz aks list --query \"[].{name:name, publicFqdn:fqdn, rbac:enableRbac, privateCluster:apiServerAccessProfile.enablePrivateCluster}\" -o table\naz aks show -g RESOURCE_GROUP -n AKS_NAME --query \"{privateCluster:apiServerAccessProfile.enablePrivateCluster, authorizedIpRanges:apiServerAccessProfile.authorizedIpRanges}\"\naz apim list --query \"[].{name:name, gatewayUrl:gatewayUrl}\" -o table",
             "criteria": "NSG 규칙의 Source가 Any(*)로 설정되어 인터넷 전체로부터 인바운드가 허용됨, 특히 22·3389 포트가 전면 개방",
             "fix": "NSG Source를 특정 IP·서비스 태그로 제한, Azure Bastion 또는 Just-In-Time VM Access(Defender for Cloud) 적용, Azure Policy로 Any 허용 규칙 탐지·차단"
         },
         "aws": {
-            "cmd": "aws ec2 describe-security-groups --query \"SecurityGroups[?IpPermissions[?IpRanges[?CidrIp=='0.0.0.0/0']]].[GroupId,GroupName]\"\naws ec2 describe-security-groups --query \"SecurityGroups[?IpPermissions[?FromPort==\\`22\\` && IpRanges[?CidrIp=='0.0.0.0/0']]].[GroupId,GroupName]\"\naws ec2 describe-security-groups --query \"SecurityGroups[?IpPermissions[?FromPort==\\`3389\\` && IpRanges[?CidrIp=='0.0.0.0/0']]].[GroupId,GroupName]\"\naws rds describe-db-instances --query \"DBInstances[?PubliclyAccessible==\\`true\\`].[DBInstanceIdentifier,Endpoint.Address]\"",
+            "cmd": "aws ec2 describe-security-groups --query \"SecurityGroups[?IpPermissions[?IpRanges[?CidrIp=='0.0.0.0/0']]].[GroupId,GroupName]\"\naws ec2 describe-security-groups --query \"SecurityGroups[?IpPermissions[?FromPort==\\`22\\` && IpRanges[?CidrIp=='0.0.0.0/0']]].[GroupId,GroupName]\"\naws ec2 describe-security-groups --query \"SecurityGroups[?IpPermissions[?FromPort==\\`3389\\` && IpRanges[?CidrIp=='0.0.0.0/0']]].[GroupId,GroupName]\"\naws rds describe-db-instances --query \"DBInstances[?PubliclyAccessible==\\`true\\`].[DBInstanceIdentifier,Endpoint.Address]\"\naws eks list-clusters --query \"clusters\"\naws eks describe-cluster --name CLUSTER_NAME --query \"cluster.resourcesVpcConfig.{publicAccess:endpointPublicAccess, publicCidrs:publicAccessCidrs}\"\naws apigateway get-rest-apis --query \"items[*].[name,id]\"\naws apigateway get-method --rest-api-id API_ID --resource-id RES_ID --http-method GET --query \"{authType:authorizationType, apiKey:apiKeyRequired}\"",
             "criteria": "0.0.0.0/0(Any)로부터 전체 포트 또는 관리 포트(22, 3389, 3306, 5432 등)가 인바운드로 열려 있음",
             "fix": "보안그룹 인바운드를 업무상 필요한 출발지 IP·대역으로 제한, 관리 포트는 사내 VPN·Bastion 대역만 허용, AWS Config 규칙(restricted-ssh 등)으로 상시 탐지"
         }
@@ -306,12 +306,12 @@ CONTROLS: list[dict] = [
             "alert"
         ],
         "azure": {
-            "cmd": "az security alert list --query \"[?status=='Active']\"\naz security auto-provisioning-setting list",
+            "cmd": "az security alert list --query \"[?status=='Active']\"\naz security auto-provisioning-setting list\naz network application-gateway waf-policy list --query \"[].{name:name, mode:policySettings.mode, state:policySettings.state}\" -o table\naz network front-door waf-policy list -g RESOURCE_GROUP --query \"[].{name:name, mode:policySettings.mode}\" -o table",
             "criteria": "Defender for Cloud Active Alert이 다수 미해결 상태로 누적됨, 자동 프로비저닝(모니터링 에이전트 배포)이 비활성화되어 일부 리소스가 모니터링 사각지대에 있음",
             "fix": "Defender for Cloud 전체 플랜과 Auto-provisioning 활성화, Microsoft Sentinel 연동으로 상관분석·자동대응(Playbook) 구성, Active Alert 대응 SLA 수립"
         },
         "aws": {
-            "cmd": "aws guardduty list-detectors\naws guardduty get-detector --detector-id DETECTOR_ID\naws guardduty list-findings --detector-id DETECTOR_ID",
+            "cmd": "aws guardduty list-detectors\naws guardduty get-detector --detector-id DETECTOR_ID\naws guardduty list-findings --detector-id DETECTOR_ID\naws wafv2 list-web-acls --scope REGIONAL --query \"WebACLs[*].[Name,Id]\"\naws wafv2 list-web-acls --scope CLOUDFRONT --query \"WebACLs[*].[Name,Id]\"",
             "criteria": "GuardDuty가 비활성화되어 있음, 활성화된 경우에도 High·Critical Finding이 장기간 확인·대응되지 않고 누적됨",
             "fix": "전 계정·리전에 GuardDuty 활성화(Organizations 위임 관리자로 중앙화), Finding을 EventBridge+SNS 또는 SOAR로 자동 알림·대응 연계, 위협 인텔리전스 룰셋 정기 갱신"
         }

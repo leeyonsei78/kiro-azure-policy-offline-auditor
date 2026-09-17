@@ -78,6 +78,8 @@ class Finding:
     steps: str = ""
     risk_score: int = 0          # 0~100, 조치 우선순위(높을수록 먼저)
     risk_factors: list[str] = field(default_factory=list)  # 위험 가중 근거(예: "인터넷 노출")
+    mitre_id: str = ""           # MITRE ATT&CK Technique ID (예: "T1190")
+    mitre_name: str = ""         # MITRE ATT&CK Technique 이름
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

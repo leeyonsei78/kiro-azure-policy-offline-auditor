@@ -88,6 +88,8 @@ def format_text(report: AuditReport) -> str:
             lines.append(f"  {_SEV_MARK.get(f.severity.name, '')} {f.title}")
             if f.resource:
                 lines.append(f"      대상: {f.resource}")
+            if getattr(f, "mitre_id", ""):
+                lines.append(f"      MITRE ATT&CK: {f.mitre_id} {f.mitre_name}")
             lines.append(f"      문제: {f.description}")
             if getattr(f, "why", ""):
                 lines.append(f"      왜 문제인가: {f.why}")
@@ -132,6 +134,8 @@ _CSV_COLUMNS = [
     ("issue_type", "이슈유형"),
     ("title", "제목"),
     ("resource", "대상리소스"),
+    ("mitre_id", "MITRE ID"),
+    ("mitre_name", "MITRE 기법"),
     ("description", "문제(판단기준)"),
     ("why", "왜 문제인가"),
     ("recommendation", "개선방안"),
@@ -220,7 +224,9 @@ def format_html(report: AuditReport) -> str:
                 f"<div class='ftop'><span class='sev' style='background:{color}'>{_esc(sev)}</span>"
                 f"<span class='ftitle'>{_esc(f.title)}</span></div>"
                 f"{res}"
-                f"<div class='p'><b>문제:</b> {_esc(f.description)}</div>"
+                + (f"<div class='mitre'>MITRE ATT&CK {_esc(f.mitre_id)} · {_esc(f.mitre_name)}</div>"
+                   if getattr(f, 'mitre_id', '') else "")
+                + f"<div class='p'><b>문제:</b> {_esc(f.description)}</div>"
                 f"{why}"
                 f"<div class='fix'><b>개선:</b> {_esc(f.recommendation)}</div>"
                 f"{howto}"
@@ -290,6 +296,7 @@ def format_html(report: AuditReport) -> str:
   .howto{{ margin-top:4px; background:#eef5ff; border-left:3px solid #2980b9; padding:4px 8px; font-size:12px; line-height:1.55; }}
   .steps{{ margin-top:4px; background:#f0f7f2; border-left:3px solid #27ae60; padding:4px 8px; font-size:11.5px; line-height:1.6; font-family:Consolas,monospace; word-break:break-all; }}
   .evlabel{{ margin-top:6px; font-size:11px; color:#555; }}
+  .mitre{{ display:inline-block; font-size:11px; font-weight:700; color:#6b3fa0; background:#f0e8fb; border:1px solid #c9b3e8; padding:1px 7px; border-radius:4px; margin-top:3px; }}
   .corr{{ margin:6px 0; padding:8px 10px; background:#fdecea; border:1px solid #e0a0a0; border-left:4px solid #c0392b; border-radius:6px; }}
   .corrtitle{{ font-weight:700; color:#c0392b; margin-bottom:3px; }}
   table.toprisk{{ border-collapse:collapse; width:100%; margin:6px 0; font-size:12px; }}

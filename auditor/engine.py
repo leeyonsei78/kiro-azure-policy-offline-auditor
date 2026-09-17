@@ -237,6 +237,22 @@ _EXAMPLES: dict[str, dict[str, str]] = {
         "bad": "코드/설정에 평문: password=P@ssw0rd!, AKIAIOSFODNN7EXAMPLE",
         "good": "Secrets Manager/Key Vault로 이전, 코드엔 참조만, 노출 키 즉시 폐기·교체",
     },
+    "eks_public_api": {
+        "bad": "endpointPublicAccess: true, publicAccessCidrs: [0.0.0.0/0]",
+        "good": "endpointPublicAccess: false(프라이빗) 또는 publicAccessCidrs를 회사 IP로 제한",
+    },
+    "aks_public_api": {
+        "bad": "enablePrivateCluster: false, authorizedIpRanges: [] (전체 공개)",
+        "good": "enablePrivateCluster: true 또는 authorizedIpRanges에 회사 IP만 등록",
+    },
+    "aks_rbac_disabled": {
+        "bad": "enableRbac: false",
+        "good": "enableRbac: true (+ Azure AD 통합 RBAC 권장)",
+    },
+    "apigw_no_auth": {
+        "bad": "API Gateway 메서드 authorizationType: NONE, apiKeyRequired: false",
+        "good": "IAM/Cognito/Lambda Authorizer 적용, 또는 최소한 API Key + 사용량 계획",
+    },
 }
 
 
@@ -475,6 +491,33 @@ _EXPLAIN: dict[str, dict[str, str]] = {
                       "2) 시크릿을 AWS Secrets Manager / Azure Key Vault로 옮기고, 코드에서는 참조만 합니다.\n"
                       "3) 소스 이력(git)에 남았으면 이력에서도 제거합니다.\n"
                       "4) 커밋 전 시크릿 검사(pre-commit hook 등)를 도입합니다.",
+    },
+    "eks_public_api": {
+        "why": "쿠버네티스 클러스터의 관리 API(kube-apiserver)가 인터넷에 공개돼 있습니다. "
+               "공격자가 API 취약점·탈취된 토큰으로 접근하면 클러스터 전체(모든 컨테이너)를 장악할 수 있습니다.",
+        "how_to_fix": "1) 클러스터 API 엔드포인트를 프라이빗으로 전환하거나,\n"
+                      "2) 퍼블릭 접근이 필요하면 접근 허용 CIDR를 회사 IP로 제한합니다.\n"
+                      "3) 감사 로그(Audit)와 RBAC을 함께 강화합니다.",
+    },
+    "aks_public_api": {
+        "why": "AKS 관리 API가 인터넷에 공개돼 있습니다. 프라이빗 클러스터가 아니고 승인 IP 제한도 없으면 "
+               "누구나 API에 접근 시도가 가능해 클러스터 침해 위험이 큽니다.",
+        "how_to_fix": "1) 프라이빗 클러스터로 만들거나(신규 생성 시),\n"
+                      "2) 기존 클러스터는 '승인된 IP 범위'에 회사 IP만 등록합니다.\n"
+                      "3) Azure AD 통합 RBAC을 활성화합니다.",
+    },
+    "aks_rbac_disabled": {
+        "why": "쿠버네티스 RBAC이 꺼져 있어 세분화된 권한 통제가 안 됩니다. 한 계정이 뚫리면 "
+               "클러스터 전체 리소스에 접근할 수 있습니다.",
+        "how_to_fix": "1) RBAC은 클러스터 생성 시 활성화해야 합니다(기존 클러스터는 재생성 필요).\n"
+                      "2) Azure AD 통합 인증 + 네임스페이스별 최소권한 Role을 적용합니다.",
+    },
+    "apigw_no_auth": {
+        "why": "API Gateway 엔드포인트에 인증이 없어 누구나 호출할 수 있습니다. 백엔드 데이터 조회·변경, "
+               "요금 폭탄(과도한 호출)으로 이어질 수 있습니다.",
+        "how_to_fix": "1) 메서드에 인증(IAM/Cognito/Lambda Authorizer)을 적용합니다.\n"
+                      "2) 최소한 API Key + 사용량 계획(Usage Plan)으로 호출을 제한합니다.\n"
+                      "3) 앞단에 WAF를 두어 악성 요청을 차단합니다.",
     },
 }
 
@@ -743,6 +786,94 @@ _STEPS: dict[str, str] = {
         "2) 코드/설정에서 하드코딩 값을 제거하고 시크릿 저장소 참조로 교체합니다.\n"
         "3) git 이력에 남았으면 이력에서도 제거(git filter-repo 등)하고, 커밋 전 시크릿 스캔을 도입합니다."
     ),
+    "eks_public_api": (
+        "[포털] AWS 콘솔 → EKS → 해당 클러스터 → '네트워킹' → '관리' → API 서버 엔드포인트 액세스 "
+        "→ '프라이빗'으로 변경하거나 '퍼블릭' 유지 시 CIDR를 회사 IP로 제한 → 저장.\n"
+        "[CLI]\n"
+        "  aws eks update-cluster-config --name <클러스터> "
+        "--resources-vpc-config endpointPublicAccess=false,endpointPrivateAccess=true\n"
+        "  (퍼블릭 유지 시) ...endpointPublicAccess=true,publicAccessCidrs=<회사IP>/32"
+    ),
+    "aks_public_api": (
+        "[포털] Azure Portal → 'Kubernetes 서비스' → 해당 클러스터 → '네트워킹' → "
+        "'권한이 부여된 IP 범위 설정'에 회사 IP를 등록 → 저장. (프라이빗 클러스터는 생성 시 지정)\n"
+        "[CLI]\n"
+        "  az aks update -g <RG> -n <AKS> --api-server-authorized-ip-ranges <회사IP>/32"
+    ),
+    "aks_rbac_disabled": (
+        "[안내] Kubernetes RBAC은 AKS 생성 시에만 켤 수 있어, 기존 클러스터는 RBAC 활성 상태로 재생성해야 합니다.\n"
+        "[CLI] 신규 생성 예:\n"
+        "  az aks create -g <RG> -n <AKS> --enable-aad --enable-azure-rbac\n"
+        "기존 워크로드는 새 클러스터로 마이그레이션합니다."
+    ),
+    "apigw_no_auth": (
+        "[포털] AWS 콘솔 → API Gateway → 해당 API → 리소스 → 메서드 선택 → '메서드 요청' "
+        "→ '권한 부여'를 IAM/Cognito/Authorizer로 설정 → API 배포.\n"
+        "[CLI] Lambda Authorizer/IAM 적용은 콘솔 권장. 최소한 API Key 요구:\n"
+        "  aws apigateway update-method --rest-api-id <API> --resource-id <RES> "
+        "--http-method GET --patch-operations op=replace,path=/apiKeyRequired,value=true"
+    ),
+}
+
+
+# 이슈 유형 → MITRE ATT&CK Technique 매핑 (ID, 이름).
+# 위협 관점에서 "이 취약점이 어떤 공격 기법에 악용되는가"를 보여준다.
+_MITRE: dict[str, tuple[str, str]] = {
+    # 인터넷 노출 → 외부 접근/원격 서비스 악용
+    "aws_sg_open_sensitive_port": ("T1190", "Exploit Public-Facing Application"),
+    "aws_sg_open_any": ("T1190", "Exploit Public-Facing Application"),
+    "nsg_open_sensitive_port": ("T1190", "Exploit Public-Facing Application"),
+    "nsg_open_all_ports": ("T1190", "Exploit Public-Facing Application"),
+    "nsg_open_any": ("T1190", "Exploit Public-Facing Application"),
+    "aws_rds_public": ("T1190", "Exploit Public-Facing Application"),
+    "sql_public_access": ("T1190", "Exploit Public-Facing Application"),
+    "webapp_https_disabled": ("T1040", "Network Sniffing"),
+    "storage_https_disabled": ("T1040", "Network Sniffing"),
+    "storage_weak_tls": ("T1040", "Network Sniffing"),
+    "eks_public_api": ("T1190", "Exploit Public-Facing Application"),
+    "aks_public_api": ("T1190", "Exploit Public-Facing Application"),
+    "apigw_no_auth": ("T1190", "Exploit Public-Facing Application"),
+    # 데이터 노출 → 클라우드 스토리지/데이터 수집
+    "aws_s3_public_block_off": ("T1530", "Data from Cloud Storage"),
+    "aws_s3_public_policy": ("T1530", "Data from Cloud Storage"),
+    "storage_public_blob": ("T1530", "Data from Cloud Storage"),
+    "aws_ebs_snapshot_public": ("T1530", "Data from Cloud Storage"),
+    "aws_s3_no_encryption": ("T1530", "Data from Cloud Storage"),
+    "sql_tde_disabled": ("T1530", "Data from Cloud Storage"),
+    "disk_no_cmk": ("T1530", "Data from Cloud Storage"),
+    "pii_exposed": ("T1552", "Unsecured Credentials / Sensitive Data"),
+    "secret_exposed": ("T1552", "Unsecured Credentials"),
+    # 계정/권한 → 유효 계정·권한 상승
+    "aws_iam_no_mfa": ("T1078", "Valid Accounts"),
+    "mfa_ca_disabled": ("T1078", "Valid Accounts"),
+    "aws_root_access_key": ("T1078.004", "Valid Accounts: Cloud Accounts"),
+    "aws_iam_wildcard_admin": ("T1098", "Account Manipulation / Privilege Escalation"),
+    "rbac_privileged_assignment": ("T1098", "Account Manipulation / Privilege Escalation"),
+    "aks_rbac_disabled": ("T1098", "Account Manipulation"),
+    # 키/암호화
+    "sql_cmk_not_used": ("T1552", "Unsecured Credentials"),
+    "keyvault_softdelete_off": ("T1485", "Data Destruction"),
+    "keyvault_purge_off": ("T1485", "Data Destruction"),
+    # 로깅/방어 무력화 → 방어 회피
+    "cloudtrail_missing": ("T1562.008", "Impair Defenses: Disable Cloud Logs"),
+    "diagnostic_missing": ("T1562.008", "Impair Defenses: Disable Cloud Logs"),
+    "vpc_flowlogs_missing": ("T1562.008", "Impair Defenses: Disable Cloud Logs"),
+    "aws_config_recorder_off": ("T1562", "Impair Defenses"),
+    "sql_auditing_disabled": ("T1562.008", "Impair Defenses: Disable Cloud Logs"),
+    "nsg_outbound_any": ("T1048", "Exfiltration Over Alternative Protocol"),
+    # 탐지/대응 미비
+    "sql_defender_disabled": ("T1562", "Impair Defenses"),
+    "defender_active_alert": ("T1078", "Valid Accounts"),
+    # 취약점/패치
+    "cve_detected": ("T1210", "Exploitation of Remote Services"),
+    "assessment_unhealthy": ("T1210", "Exploitation of Remote Services"),
+    "patch_pending": ("T1210", "Exploitation of Remote Services"),
+    "sql_va_disabled": ("T1210", "Exploitation of Remote Services"),
+    # 백업/재해
+    "backup_failed": ("T1490", "Inhibit System Recovery"),
+    "backup_lrs": ("T1490", "Inhibit System Recovery"),
+    "sql_ltr_not_configured": ("T1490", "Inhibit System Recovery"),
+    "sql_no_private_endpoint": ("T1190", "Exploit Public-Facing Application"),
 }
 
 
@@ -755,6 +886,7 @@ def _finding(code: str, issue_type: str, severity: Severity, title: str,
     # 이슈 유형별 맞춤 예시가 있으면 우선 사용, 없으면 통제항목 기본값.
     ex = _EXAMPLES.get(issue_type, {})
     expl = _EXPLAIN.get(issue_type, {})
+    mitre = _MITRE.get(issue_type, ("", ""))
     return Finding(
         control_code=code,
         control_domain=kb.get("domain", ""),
@@ -771,6 +903,8 @@ def _finding(code: str, issue_type: str, severity: Severity, title: str,
         why=why or expl.get("why", ""),
         how_to_fix=how_to_fix or expl.get("how_to_fix", ""),
         steps=steps or _STEPS.get(issue_type, ""),
+        mitre_id=mitre[0],
+        mitre_name=mitre[1],
     )
 
 
@@ -937,6 +1071,8 @@ def _sql_finding(key: str, severity: Severity, findings: list[Finding],
         why=meta.get("why", ""),
         how_to_fix=meta.get("how_to_fix", ""),
         steps=meta.get("steps", "") or _STEPS.get(key, ""),
+        mitre_id=_MITRE.get(key, ("", ""))[0],
+        mitre_name=_MITRE.get(key, ("", ""))[1],
     ))
 
 
@@ -1263,8 +1399,33 @@ def _check_aws_ebs_snapshot_obj(d: dict, findings: list[Finding]) -> None:
                 return
 
 
+def _check_aws_eks_obj(d: dict, findings: list[Finding], seen: set) -> None:
+    """AWS EKS 클러스터(2.6.1). API 서버 엔드포인트 퍼블릭 접근."""
+    vpc = _val(d, "resourcesVpcConfig", "resourcesvpcconfig")
+    src = vpc if isinstance(vpc, dict) else d
+    pub = _val(src, "endpointPublicAccess", "publicAccess")
+    if pub is True or str(pub).lower() == "true":
+        cidrs = _val(src, "publicAccessCidrs", "publicCidrs") or []
+        wide_open = (not cidrs) or ("0.0.0.0/0" in [str(c) for c in cidrs])
+        name = str(_val(d, "name", "clusterName", default="") or "")
+        # 중복 방지: 같은 클러스터(외부 객체 + 중첩 vpc 설정)가 두 번 잡히지 않도록
+        key = ("eks", name, str(sorted([str(c) for c in cidrs])))
+        if wide_open and key not in seen:
+            seen.add(key)
+            findings.append(_finding(
+                "2.6.1", "eks_public_api", Severity.HIGH,
+                f"EKS API 서버 퍼블릭 노출: {name or '(클러스터미상)'}",
+                "EKS 클러스터의 Kubernetes API 서버가 인터넷 전체(0.0.0.0/0)에 공개되어 있습니다.",
+                platform="aws", evidence=json.dumps(d, ensure_ascii=False), resource=name,
+            ))
+
+
 def _check_aws_object(d: dict, findings: list[Finding], seen: set) -> None:
     """AWS 리소스 dict 라우팅."""
+    # EKS 클러스터 객체(resourcesVpcConfig를 가진 상위 객체)만 검사 —
+    # 중첩된 vpc 설정 dict 단독으로는 중복 검사하지 않도록 제한.
+    if _val(d, "resourcesVpcConfig", "resourcesvpcconfig") is not None:
+        _check_aws_eks_obj(d, findings, seen)
     if _val(d, "PubliclyAccessible", "publiclyAccessible") is not None \
             and _val(d, "DBInstanceIdentifier", "dbInstanceIdentifier", "Engine", "engine") is not None:
         _check_aws_rds_obj(d, findings)
@@ -1320,11 +1481,42 @@ def _check_azure_disk_obj(d: dict, findings: list[Finding]) -> None:
         ))
 
 
+def _check_azure_aks_obj(d: dict, findings: list[Finding]) -> None:
+    """Azure AKS(2.6.1). API 서버 퍼블릭(프라이빗 클러스터 아님) + RBAC 미사용."""
+    prof = _val(d, "apiServerAccessProfile")
+    prof = prof if isinstance(prof, dict) else d
+    private = _val(prof, "enablePrivateCluster", "privateCluster")
+    auth_ranges = _val(prof, "authorizedIpRanges", "authorizedIPRanges")
+    name = str(_val(d, "name", default="") or "")
+    # 프라이빗 클러스터가 아니고 승인 IP 범위도 없으면 API가 전체 공개
+    is_private = private is True or str(private).lower() == "true"
+    if not is_private and not auth_ranges:
+        findings.append(_finding(
+            "2.6.1", "aks_public_api", Severity.HIGH,
+            f"AKS API 서버 퍼블릭 노출: {name or '(클러스터미상)'}",
+            "AKS 클러스터가 프라이빗 클러스터가 아니고 승인 IP 범위도 없어, Kubernetes API 서버가 인터넷에 공개됩니다.",
+            platform="azure", evidence=json.dumps(d, ensure_ascii=False), resource=name,
+        ))
+    # RBAC 비활성
+    rbac = _val(d, "enableRbac", "enableRBAC")
+    if rbac is False or str(rbac).lower() == "false":
+        findings.append(_finding(
+            "2.5.5", "aks_rbac_disabled", Severity.MEDIUM,
+            f"AKS Kubernetes RBAC 비활성: {name or '(클러스터미상)'}",
+            "AKS 클러스터의 Kubernetes RBAC이 비활성이라 세분화된 권한 통제가 되지 않습니다.",
+            platform="azure", evidence=json.dumps(d, ensure_ascii=False), resource=name,
+        ))
+
+
 def _check_azure_object(d: dict, findings: list[Finding], seen: set) -> None:
     if _val(d, "sourceAddressPrefix", "sourceAddressPrefixes") is not None or (
         _val(d, "direction") is not None and _val(d, "access") is not None
     ):
         _check_nsg_rule_obj(d, findings)
+
+    if _val(d, "apiServerAccessProfile") is not None or _val(d, "enableRbac", "enableRBAC") is not None \
+            or _looks_like(d, "managedclusters", "microsoft.containerservice"):
+        _check_azure_aks_obj(d, findings)
 
     if _val(d, "httpsOnly", "httpsonly") is not None:
         _check_azure_webapp_obj(d, findings)
@@ -1480,6 +1672,13 @@ def _check_raw_text(text: str, findings: list[Finding], existing_types: set, hin
             "AWS Config 구성 레코더가 비활성 상태로, 리소스 구성 변경 이력이 기록되지 않습니다.",
             platform="aws",
             evidence=_snippet(text, r"recording[^,}\n]*(false|0)", r"configurationrecorder", r"config.{0,10}recorder"))
+    # API Gateway 인증 없음 (AWS)
+    if re.search(r"authorizationtype", low) and re.search(r'"?authorizationtype"?\s*[:=]\s*"?none', low):
+        add("2.6.1", "apigw_no_auth", Severity.HIGH,
+            "API Gateway 인증 없는 메서드",
+            "API Gateway 메서드의 authorizationType이 NONE으로, 인증 없이 누구나 호출할 수 있습니다.",
+            platform="aws",
+            evidence=_snippet(text, r"authorizationtype[^,}\n]*none"))
     # 백업 실패/LRS
     if re.search(r"lastbackupstatus.{0,10}failed|backup.{0,10}failed|백업.{0,5}실패", low):
         add("2.12.1", "backup_failed", Severity.HIGH,
@@ -1622,6 +1821,7 @@ _INTERNET_EXPOSED_TYPES = {
     "aws_s3_public_block_off", "aws_s3_public_policy", "aws_ebs_snapshot_public",
     "nsg_open_sensitive_port", "nsg_open_all_ports", "nsg_open_any",
     "storage_public_blob", "webapp_https_disabled", "sql_public_access",
+    "eks_public_api", "aks_public_api", "apigw_no_auth",
 }
 # 민감 데이터/자격증명 직접 노출 성격
 _DATA_EXPOSURE_TYPES = {
@@ -1773,3 +1973,35 @@ def analyze(text: str) -> AuditReport:
             "형식이 아닐 수 있습니다. CLI를 '-o json'으로 내보낸 출력을 넣으면 정밀도가 높아집니다."
         )
     return report
+
+
+def _finding_key(f: dict) -> str:
+    """추세 비교용 이슈 고유키(플랫폼|통제코드|이슈유형|리소스)."""
+    return "|".join([
+        str(f.get("platform", "")), str(f.get("control_code", "")),
+        str(f.get("issue_type", "")), str(f.get("resource", "")),
+    ])
+
+
+def diff_reports(current: dict, previous: dict) -> dict:
+    """두 점검 결과(to_dict)를 비교해 신규/해결/유지 이슈와 점수 변화를 산출.
+
+    화면·CLI에서 추세(이전 대비 개선/악화)를 보여주기 위한 순수 함수.
+    반환: {added, resolved, kept, score_delta, ...}
+    """
+    cur = {_finding_key(f): f for f in current.get("findings", [])}
+    prev = {_finding_key(f): f for f in previous.get("findings", [])}
+    added = [cur[k] for k in cur if k not in prev]
+    resolved = [prev[k] for k in prev if k not in cur]
+    kept = [cur[k] for k in cur if k in prev]
+    cs, ps = current.get("score", 0), previous.get("score", 0)
+    return {
+        "added": added,
+        "resolved": resolved,
+        "kept_count": len(kept),
+        "added_count": len(added),
+        "resolved_count": len(resolved),
+        "score_current": cs,
+        "score_previous": ps,
+        "score_delta": cs - ps,
+    }
