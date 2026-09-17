@@ -20,6 +20,35 @@ from .knowledge_base import collection_commands
 _PLAT_LABEL = {"aws": "AWS", "azure": "Azure"}
 
 
+# 서비스 그룹별 '점검 대상'과 '권장 읽기 전용 권한' 안내.
+# 클라우드 CLI(az/aws)는 관리자 PC 한 대에서 실행하면 API로 원격 수집하므로,
+# 각 장비(방화벽/서버/DB)에 직접 접속할 필요가 없다. 다만 계정 권한은 필요하다.
+_SERVICE_INFO = {
+    # Azure
+    "네트워크(NSG/방화벽)": ("NSG·방화벽·Bastion·라우팅", "Reader (네트워크 읽기)"),
+    "IAM/Entra ID": ("사용자·역할·MFA·서비스주체", "Reader + Directory Readers(Entra ID 조회)"),
+    "Storage": ("스토리지 계정 구성·암호화", "Reader"),
+    "Key Vault": ("Key Vault 속성·키", "Reader (Key Vault 데이터는 별도 정책 필요)"),
+    "SQL Database": ("SQL 서버·DB 보안 설정", "Reader + SQL Security Manager(감사·VA 조회)"),
+    "모니터링/로그": ("진단 설정·활동 로그·Log Analytics", "Reader + Monitoring Reader"),
+    "거버넌스(Policy/관리그룹)": ("정책 할당·관리 그룹", "Reader"),
+    "패치/업데이트": ("VM 패치·업데이트 구성", "Reader"),
+    "Defender for Cloud": ("경고·권장사항·요금제·WAF", "Security Reader"),
+    "백업/재해복구": ("백업 정책·항목·자격증명 모음", "Reader + Backup Reader"),
+    # AWS
+    "네트워크(보안그룹)": ("보안그룹·EC2·라우팅·EKS·API GW", "ReadOnlyAccess (또는 ViewOnlyAccess)"),
+    "IAM": ("사용자·정책·MFA·액세스 키", "IAMReadOnlyAccess"),
+    "S3/스토리지": ("S3 버킷·EBS·RDS 암호화", "ReadOnlyAccess"),
+    "KMS": ("KMS 키·로테이션", "ReadOnlyAccess"),
+    "RDS": ("RDS 인스턴스 보안", "ReadOnlyAccess"),
+    "CloudTrail/로그": ("CloudTrail·VPC Flow Logs·Config", "ReadOnlyAccess"),
+    "거버넌스(Organizations/Config)": ("Organizations·Config", "ReadOnlyAccess"),
+    "패치(SSM)": ("SSM 패치·컴플라이언스", "ReadOnlyAccess"),
+    "GuardDuty/Inspector": ("GuardDuty·Inspector·SecurityHub·WAF", "SecurityAudit"),
+    "기타": ("기타 리소스", "읽기 전용 권한"),
+}
+
+
 def _slug(text: str) -> str:
     """서비스 그룹명 → 파일명 안전한 ascii slug."""
     mapping = {
@@ -67,9 +96,21 @@ def _build_bash(platform: str) -> str:
     a("# ============================================================")
     a(f"#  {label} 보안 점검 정보 일괄 수집 스크립트 (ISMS-P)")
     a("# ============================================================")
-    a("#  [사용 방법]")
+    a("#  [어디서 실행하나요?]")
+    a(f"#   * 이 스크립트는 {label} CLI({cli})가 설치된 '관리자 PC(또는 점검용 단말)' 한 대에서")
+    a("#     실행하면 됩니다. 방화벽·서버·DB 등 각 장비에 개별 접속할 필요가 없습니다.")
+    a(f"#   * {cli} 명령은 {label} API를 호출해 원격으로 구성 정보를 가져옵니다.")
+    a("#     (온프레미스 장비처럼 '방화벽에서 따로, 서버에서 따로' 돌리는 방식이 아닙니다.)")
+    a("#   * 즉, 이 스크립트 하나로 모든 서비스(네트워크/IAM/스토리지/DB 등)를 자동 수집합니다.")
+    a("#")
+    a("#  [준비]")
     a(f"#   1) {label} CLI 설치 및 로그인:  {login}")
-    a("#   2) 조회 권한(읽기 전용) 계정으로 로그인되어 있어야 합니다.")
+    a("#   2) '읽기 전용(Reader/ReadOnly)' 권한 계정으로 로그인되어 있어야 합니다.")
+    a("#      (서비스별 권장 권한은 각 섹션 주석의 '필요 권한'을 참고하세요.)")
+    if platform == "azure":
+        a("#      여러 구독을 점검하려면:  az account set --subscription <구독ID> 로 전환 후 재실행.")
+    else:
+        a("#      여러 계정/리전을 점검하려면:  AWS_PROFILE / --region 을 바꿔 재실행.")
     a("#   3) 아래 자리표시자(<RG>,<SERVER>,<DB>,<NSG>,<BUCKET> 등)를")
     a("#      실제 값으로 바꾸거나, 반복이 필요하면 각 섹션을 복제해 사용하세요.")
     a("#   4) 실행:   chmod +x collect.sh && ./collect.sh    (또는  bash collect.sh)")
@@ -92,9 +133,12 @@ def _build_bash(platform: str) -> str:
 
     for svc, items in _group_by_service(platform):
         slug = _slug(svc)
+        target, perm = _SERVICE_INFO.get(svc, ("해당 서비스 구성", "읽기 전용 권한"))
         a("# ------------------------------------------------------------")
-        a(f"# 장비/서비스: {svc}")
-        a(f"#   이 섹션의 명령을 실행해 {svc} 관련 구성을 수집합니다.")
+        a(f"# 서비스 그룹: {svc}")
+        a(f"#   실행 위치: 관리자 PC(이 스크립트 실행 단말) — {cli} API로 원격 수집")
+        a(f"#   점검 대상: {target}")
+        a(f"#   필요 권한: {perm}")
         a("# ------------------------------------------------------------")
         n = 0
         for it in items:
@@ -126,9 +170,15 @@ def _build_ps1(platform: str) -> str:
     a("# ============================================================")
     a(f"#  {label} 보안 점검 정보 일괄 수집 스크립트 (ISMS-P) - PowerShell")
     a("# ============================================================")
-    a("#  [사용 방법]")
+    a("#  [어디서 실행하나요?]")
+    a(f"#   * {label} CLI({cli})가 설치된 '관리자 PC' 한 대에서 실행하면 됩니다.")
+    a("#     방화벽·서버·DB 등 각 장비에 개별 접속할 필요가 없습니다.")
+    a(f"#   * {cli} 명령이 {label} API를 호출해 원격으로 모든 서비스 구성을 자동 수집합니다.")
+    a("#")
+    a("#  [준비]")
     a(f"#   1) {label} CLI 로그인:  {login}")
-    a("#   2) 조회 권한(읽기 전용) 계정으로 로그인되어 있어야 합니다.")
+    a("#   2) '읽기 전용(Reader/ReadOnly)' 권한 계정으로 로그인되어 있어야 합니다.")
+    a("#      (서비스별 권장 권한은 각 섹션 주석의 '필요 권한' 참고)")
     a("#   3) 자리표시자(<RG>,<SERVER>,<DB>,<NSG> 등)를 실제 값으로 바꾸세요.")
     a("#   4) 실행(PowerShell):")
     a("#         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force")
@@ -150,8 +200,12 @@ def _build_ps1(platform: str) -> str:
 
     for svc, items in _group_by_service(platform):
         slug = _slug(svc)
+        target, perm = _SERVICE_INFO.get(svc, ("해당 서비스 구성", "읽기 전용 권한"))
         a("# ------------------------------------------------------------")
-        a(f"# 장비/서비스: {svc}")
+        a(f"# 서비스 그룹: {svc}")
+        a(f"#   실행 위치: 관리자 PC(이 스크립트 실행 단말) — {cli} API로 원격 수집")
+        a(f"#   점검 대상: {target}")
+        a(f"#   필요 권한: {perm}")
         a("# ------------------------------------------------------------")
         n = 0
         for it in items:

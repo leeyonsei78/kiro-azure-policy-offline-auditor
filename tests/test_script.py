@@ -32,12 +32,11 @@ class TestBashScript(unittest.TestCase):
         self.assertTrue(s.startswith("#!/usr/bin/env bash"))
         self.assertIn("az login", s)          # 로그인 안내
         self.assertIn("mkdir -p", s)           # out 폴더
-        self.assertIn("# 장비/서비스:", s)      # 장비 섹션
+        self.assertIn("# 서비스 그룹:", s)      # 서비스 섹션
         self.assertIn("run ", s)               # run 헬퍼 호출
-        self.assertIn("사용 방법", s)           # 실행 방법 주석
         self.assertIn("업로드", s)             # 업로드 안내
-        # 장비 섹션이 여러 개
-        self.assertGreaterEqual(s.count("# 장비/서비스:"), 5)
+        # 서비스 섹션이 여러 개
+        self.assertGreaterEqual(s.count("# 서비스 그룹:"), 5)
 
     def test_aws_bash_uses_aws(self):
         s = build_script("aws", "bash")
@@ -59,6 +58,37 @@ class TestPs1Script(unittest.TestCase):
         self.assertIn("New-Item", s)           # out 폴더
         self.assertIn("Run ", s)               # Run 함수 호출
         self.assertIn("az login", s)
+
+
+class TestRunLocationGuidance(unittest.TestCase):
+    """명령을 '어디서' 실행하는지 + 필요 권한 안내가 스크립트에 포함되는지."""
+
+    def test_bash_header_explains_single_admin_pc(self):
+        for plat in ("azure", "aws"):
+            s = build_script(plat, "bash")
+            self.assertIn("관리자 PC", s)          # 실행 장비 명시
+            self.assertIn("원격", s)                # API 원격 수집 설명
+            self.assertIn("각 장비에 개별 접속할 필요가 없습니다", s)
+
+    def test_bash_sections_show_target_and_permission(self):
+        for plat in ("azure", "aws"):
+            s = build_script(plat, "bash")
+            self.assertIn("실행 위치:", s)
+            self.assertIn("점검 대상:", s)
+            self.assertIn("필요 권한:", s)
+
+    def test_ps1_header_explains_run_location(self):
+        s = build_script("azure", "ps1")
+        self.assertIn("관리자 PC", s)
+        self.assertIn("필요 권한:", s)
+
+    def test_all_service_groups_in_single_script(self):
+        # 한 스크립트로 모든 서비스 그룹이 수집되는지(누락 없이)
+        for plat in ("azure", "aws"):
+            s = build_script(plat, "bash")
+            groups = {c["service"] for c in collection_commands(plat)}
+            for g in groups:
+                self.assertIn(f"서비스 그룹: {g}", s, f"{plat}: {g} 섹션 누락")
 
 
 class TestScriptFilename(unittest.TestCase):

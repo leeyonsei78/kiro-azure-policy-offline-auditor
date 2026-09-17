@@ -142,6 +142,8 @@ INDEX_HTML = """<!DOCTYPE html>
   .copybtn{ flex:none; padding:6px 10px; border-radius:6px; border:1px solid var(--border); background:var(--panel); color:var(--text); cursor:pointer; font-size:12px; white-space:nowrap; }
   .copybtn:hover{ filter:brightness(1.15); }
   .crit-hint{ color:var(--muted); font-size:12px; margin-top:8px; border-left:3px solid var(--med); padding-left:8px; }
+  .runwhere{ font-size:12px; color:#bfe3ff; background:#0e2233; border:1px solid #24486b; border-radius:6px; padding:5px 9px; margin:6px 0; }
+  .svcbadge{ font-size:11px; color:var(--muted); background:#0b1220; border:1px solid var(--border); padding:1px 7px; border-radius:5px; }
 </style>
 </head>
 <body>
@@ -285,10 +287,15 @@ function renderCommands(){
     var crit = c.criteria ? '<div class="crit-hint">⚠️ 확인 포인트: '+esc(c.criteria)+'</div>' : '';
     var bad = c.bad_example ? '<div class="exbad"><b>✗ 위반 예시:</b> <code>'+esc(c.bad_example)+'</code></div>' : '';
     var good = c.good_example ? '<div class="exgood"><b>✓ 개선 예시:</b> <code>'+esc(c.good_example)+'</code></div>' : '';
+    var runinfo = (c.run_where||c.service_perm) ?
+      '<div class="runwhere">🖥️ 실행 위치: '+esc(c.run_where||'')+
+      (c.service_target?' &nbsp;·&nbsp; 대상: '+esc(c.service_target):'')+
+      (c.service_perm?' &nbsp;·&nbsp; 필요 권한: '+esc(c.service_perm):'')+'</div>' : '';
     return '<div class="cmdcard">'+
       '<div class="cmdhead"><span class="platbadge" style="background:'+pcolor+'">'+platName+'</span>'+
-      '<span class="code">'+esc(c.code)+'</span><b>'+esc(c.domain)+'</b></div>'+
-      '<div class="meta">'+esc(c.desc)+'</div>'+lines+crit+bad+good+'</div>';
+      '<span class="code">'+esc(c.code)+'</span><b>'+esc(c.domain)+'</b>'+
+      (c.service?'<span class="svcbadge">'+esc(c.service)+'</span>':'')+'</div>'+
+      '<div class="meta">'+esc(c.desc)+'</div>'+runinfo+lines+crit+bad+good+'</div>';
   }).join('');
 }
 function copyCmd(id, btn){
@@ -664,7 +671,15 @@ class Handler(BaseHTTPRequestHandler):
             platform = (qs.get("platform", ["aws"])[0] or "aws").lower()
             if platform not in ("aws", "azure"):
                 platform = "aws"
-            self._send_json({"platform": platform, "commands": collection_commands(platform)})
+            from .collector_script import _SERVICE_INFO
+            cmds = collection_commands(platform)
+            cli = "az" if platform == "azure" else "aws"
+            for c in cmds:
+                target, perm = _SERVICE_INFO.get(c.get("service", "기타"), ("해당 서비스 구성", "읽기 전용 권한"))
+                c["run_where"] = f"관리자 PC ({cli} CLI) — 클라우드 API로 원격 수집"
+                c["service_target"] = target
+                c["service_perm"] = perm
+            self._send_json({"platform": platform, "commands": cmds})
         elif self.path.startswith("/api/script"):
             from urllib.parse import parse_qs, urlparse
             qs = parse_qs(urlparse(self.path).query)
