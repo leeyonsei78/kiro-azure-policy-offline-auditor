@@ -99,6 +99,14 @@ INDEX_HTML = """<!DOCTYPE html>
   .howto{ margin-top:6px; padding:8px 10px; background:#10233a; border-left:3px solid #4da3ff; border-radius:6px; font-size:13px; line-height:1.6; }
   .steps{ margin-top:6px; padding:8px 10px; background:#0e1f16; border-left:3px solid #37d67a; border-radius:6px; font-size:12.5px; line-height:1.65; font-family:Consolas,'D2Coding',monospace; word-break:break-all; color:#dbe7dd; }
   .steps b{ font-family:inherit; }
+  .corr{ margin:6px 0; padding:10px 12px; background:#2a1518; border:1px solid #7a2a2a; border-left:4px solid #e05563; border-radius:8px; }
+  .corrtitle{ font-weight:700; color:#ff9b9b; margin-bottom:4px; }
+  .toprisk{ margin:6px 0; }
+  .trow{ display:flex; align-items:center; gap:8px; padding:7px 10px; margin:4px 0; background:#12233a; border:1px solid var(--border); border-radius:8px; flex-wrap:wrap; }
+  .trnum{ width:22px; height:22px; line-height:22px; text-align:center; border-radius:50%; background:#4da3ff; color:#04121f; font-weight:700; font-size:12px; }
+  .trscore{ font-weight:700; color:#ffd166; min-width:44px; }
+  .trtitle{ flex:1; font-size:13px; }
+  .trfac{ font-size:11px; color:var(--muted); background:#0b1220; padding:2px 6px; border-radius:5px; }
   .evlabel{ margin-top:8px; font-size:12px; color:var(--muted); }
   .exbad{ margin-top:6px; padding:6px 10px; background:#2a1518; border-left:3px solid var(--crit); border-radius:6px; font-size:12px; }
   .exgood{ margin-top:6px; padding:6px 10px; background:#0f2418; border-left:3px solid #37d67a; border-radius:6px; font-size:12px; }
@@ -169,6 +177,7 @@ INDEX_HTML = """<!DOCTYPE html>
       <button class="btn" onclick="openPdf()">🖨️ PDF로 저장 (인쇄)</button>
       <span class="hint">엑셀(.xlsx)은 줄바꿈·특수문자가 그대로 보존됩니다(권장). PDF는 새 창의 인쇄 대화상자에서 "PDF로 저장"을 선택하세요.</span>
     </div>
+    <div id="summary"></div>
     <div id="findings"></div>
     <div class="hint" style="margin-top:14px">※ 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.</div>
   </div>
@@ -286,7 +295,7 @@ function fallbackCopy(text){
   try{ document.execCommand('copy'); }catch(e){}
   document.body.removeChild(ta);
 }
-function clearAll(){ document.getElementById('input').value=''; document.getElementById('result-card').style.display='none'; document.getElementById('err').textContent=''; LOADED_FILENAME=''; var m=document.getElementById('load-info'); if(m) m.textContent=''; }
+function clearAll(){ document.getElementById('input').value=''; document.getElementById('result-card').style.display='none'; document.getElementById('err').textContent=''; LOADED_FILENAME=''; var m=document.getElementById('load-info'); if(m) m.textContent=''; var s=document.getElementById('summary'); if(s) s.innerHTML=''; }
 function loadFile(){
   var f=document.getElementById('file').files[0];
   var meta=document.getElementById('load-info');
@@ -392,8 +401,41 @@ function render(r){
       plats.map(function(p){ return '<button class="btn" data-p="'+p+'" onclick="setPlatFilter(\\''+p+'\\')">'+platLabel(p)+'</button>'; }).join('');
   } else { fbar.style.display='none'; fbar.innerHTML=''; }
 
+  renderSummary(r);
   renderFindings(r);
   updateFilterButtons();
+}
+function renderSummary(r){
+  var host=document.getElementById('summary'); if(!host) return;
+  var html='';
+  // 복합 위험(공격 경로) 경고 — 최상단 강조
+  if(r.correlations && r.correlations.length){
+    html+='<div class="sec" style="color:#ff8080">🚨 복합 위험(공격 경로) '+r.correlations.length+'건 — 즉시 조치 권장</div>';
+    r.correlations.forEach(function(c){
+      html+='<div class="corr">'+
+        '<div class="corrtitle">⚠️ '+esc(c.title)+'</div>'+
+        '<div class="meta"><b>공격 경로:</b> '+esc(c.attack_path)+'</div>'+
+        '<div class="fix"><b>✅ 우선 조치:</b> '+esc(c.recommendation)+'</div></div>';
+    });
+  }
+  // TOP 위험(조치 우선순위)
+  if(r.top_risks && r.top_risks.length){
+    html+='<div class="sec">🎯 조치 우선순위 TOP '+r.top_risks.length+' (위험 점수순)</div>';
+    html+='<div class="toprisk">';
+    r.top_risks.forEach(function(t,i){
+      var pc=t.platform==='aws'?'#ff9900':'#4da3ff';
+      html+='<div class="trow">'+
+        '<span class="trnum">'+(i+1)+'</span>'+
+        '<span class="trscore">'+t.risk_score+'점</span>'+
+        '<span class="sev '+esc(t.severity)+'">'+esc(t.severity)+'</span>'+
+        '<span class="platbadge" style="background:'+pc+'">'+platLabel(t.platform)+'</span>'+
+        '<span class="trtitle">'+esc(t.title)+'</span>'+
+        (t.risk_factors&&t.risk_factors.length?'<span class="trfac">'+esc(t.risk_factors.join(' · '))+'</span>':'')+
+        '</div>';
+    });
+    html+='</div>';
+  }
+  host.innerHTML=html;
 }
 function renderFindings(r){
   try{ _renderFindings(r); }

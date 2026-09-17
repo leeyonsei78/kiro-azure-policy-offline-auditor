@@ -49,6 +49,27 @@ def format_text(report: AuditReport) -> str:
             lines.append(f" · {n}")
         return "\n".join(lines)
 
+    # ── 경영진용 요약: 복합 위험(공격 경로) + 조치 우선순위 TOP ──
+    corr = d.get("correlations", [])
+    if corr:
+        lines.append("#" * 64)
+        lines.append(f" [즉시 조치 권장] 복합 위험(공격 경로) {len(corr)}건")
+        lines.append("#" * 64)
+        for c in corr:
+            lines.append(f"  ⚠️ {c['title']}")
+            lines.append(f"      공격 경로: {c['attack_path']}")
+            lines.append(f"      우선 조치: {c['recommendation']}")
+        lines.append("")
+    tops = d.get("top_risks", [])
+    if tops:
+        lines.append("-" * 64)
+        lines.append(f" [조치 우선순위 TOP {len(tops)}] 위험 점수순")
+        lines.append("-" * 64)
+        for i, t in enumerate(tops, 1):
+            fac = (" — " + " · ".join(t["risk_factors"])) if t.get("risk_factors") else ""
+            lines.append(f"  {i}. [{t['risk_score']}점][{t['severity']}][{_plat_label(t['platform'])}] {t['title']}{fac}")
+        lines.append("")
+
     # (통제코드, 플랫폼)별 그룹 — 같은 코드라도 AWS/Azure를 분리 표기
     by_key: dict[tuple, list] = {}
     for f in sorted(report.findings, key=lambda x: x.severity, reverse=True):
@@ -222,6 +243,31 @@ def format_html(report: AuditReport) -> str:
     )
     plat_meta = f" · 플랫폼: {_esc(psum)}" if psum else ""
 
+    # 경영진용 요약: 복합 위험 + 조치 우선순위 TOP
+    summary_html = ""
+    corr = d.get("correlations", [])
+    if corr:
+        rows = "".join(
+            f"<div class='corr'><div class='corrtitle'>⚠️ {_esc(c['title'])}</div>"
+            f"<div><b>공격 경로:</b> {_esc(c['attack_path'])}</div>"
+            f"<div class='fix'><b>우선 조치:</b> {_esc(c['recommendation'])}</div></div>"
+            for c in corr
+        )
+        summary_html += f"<h2 style='color:#c0392b'>🚨 복합 위험(공격 경로) {len(corr)}건 — 즉시 조치 권장</h2>{rows}"
+    tops = d.get("top_risks", [])
+    if tops:
+        trows = "".join(
+            f"<tr><td>{i}</td><td><b>{t['risk_score']}</b></td><td>{_esc(t['severity'])}</td>"
+            f"<td>{_esc(_plat_label(t['platform']))}</td><td>{_esc(t['title'])}</td>"
+            f"<td class='fac'>{_esc(' · '.join(t.get('risk_factors', [])))}</td></tr>"
+            for i, t in enumerate(tops, 1)
+        )
+        summary_html += (
+            f"<h2>🎯 조치 우선순위 TOP {len(tops)} (위험 점수순)</h2>"
+            f"<table class='toprisk'><tr><th>#</th><th>위험점수</th><th>심각도</th>"
+            f"<th>플랫폼</th><th>이슈</th><th>위험요소</th></tr>{trows}</table>"
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8">
 <title>클라우드 정책 오프라인 보안검토 리포트 (ISMS-P)</title>
@@ -244,6 +290,12 @@ def format_html(report: AuditReport) -> str:
   .howto{{ margin-top:4px; background:#eef5ff; border-left:3px solid #2980b9; padding:4px 8px; font-size:12px; line-height:1.55; }}
   .steps{{ margin-top:4px; background:#f0f7f2; border-left:3px solid #27ae60; padding:4px 8px; font-size:11.5px; line-height:1.6; font-family:Consolas,monospace; word-break:break-all; }}
   .evlabel{{ margin-top:6px; font-size:11px; color:#555; }}
+  .corr{{ margin:6px 0; padding:8px 10px; background:#fdecea; border:1px solid #e0a0a0; border-left:4px solid #c0392b; border-radius:6px; }}
+  .corrtitle{{ font-weight:700; color:#c0392b; margin-bottom:3px; }}
+  table.toprisk{{ border-collapse:collapse; width:100%; margin:6px 0; font-size:12px; }}
+  table.toprisk th,table.toprisk td{{ border:1px solid #ccc; padding:4px 8px; text-align:left; }}
+  table.toprisk th{{ background:#f0f0f0; }}
+  table.toprisk .fac{{ color:#777; font-size:11px; }}
   .ex{{ margin-top:4px; padding:4px 8px; border-radius:4px; font-size:12px; }}
   .ex code{{ font-family:Consolas,monospace; word-break:break-all; }}
   .ex.bad{{ background:#fdecea; border-left:3px solid #c0392b; }}
@@ -262,6 +314,7 @@ def format_html(report: AuditReport) -> str:
   <div class="meta">기준: ISMS-P 클라우드 인프라 통제항목 (AWS/Azure) · 오프라인 규칙 기반 자동 검토</div>
   <div class="scorebox"><span class="score">{d['score']}</span> / 100점 &nbsp; 등급 <b>{_esc(d['grade'])}</b></div>
   <div class="meta">입력형식: {_esc(d['input_kind'])} · 파싱 리소스 {d['parsed_resources']}개 · 발견 이슈 {d['total_findings']}건 ({_esc(csum)}){plat_meta}</div>
+  {summary_html}
   {body_sections}
   <div class="foot">※ 본 리포트는 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.</div>
 </body></html>"""

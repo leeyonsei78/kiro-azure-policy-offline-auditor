@@ -76,6 +76,8 @@ class Finding:
     why: str = ""
     how_to_fix: str = ""
     steps: str = ""
+    risk_score: int = 0          # 0~100, 조치 우선순위(높을수록 먼저)
+    risk_factors: list[str] = field(default_factory=list)  # 위험 가중 근거(예: "인터넷 노출")
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -91,6 +93,7 @@ class AuditReport:
     parsed_resources: int = 0
     input_kind: str = ""
     notes: list[str] = field(default_factory=list)
+    correlations: list[dict] = field(default_factory=list)  # 복합 위험(공격 경로) 경고
 
     def score(self) -> int:
         """100점 만점에서 심각도별 감점(하한 0)."""
@@ -126,7 +129,17 @@ class AuditReport:
         """발견된 이슈에 등장한 플랫폼 목록(정렬)."""
         return sorted(self.platform_counts().keys())
 
+    def _sorted_findings(self) -> list["Finding"]:
+        """조치 우선순위 정렬: 위험점수 → 심각도 순(둘 다 높은 것 먼저)."""
+        return sorted(self.findings,
+                      key=lambda x: (x.risk_score, int(x.severity)), reverse=True)
+
+    def top_risks(self, n: int = 5) -> list["Finding"]:
+        """가장 먼저 조치해야 할 상위 위험 N건."""
+        return self._sorted_findings()[:n]
+
     def to_dict(self) -> dict[str, Any]:
+        ordered = self._sorted_findings()
         return {
             "score": self.score(),
             "grade": self.grade(),
@@ -136,9 +149,13 @@ class AuditReport:
             "severity_counts": self.severity_counts(),
             "platform_counts": self.platform_counts(),
             "detected_platforms": self.detected_platforms(),
-            "findings": [
-                f.to_dict()
-                for f in sorted(self.findings, key=lambda x: x.severity, reverse=True)
+            "top_risks": [
+                {"title": f.title, "platform": f.platform, "severity": f.severity.name,
+                 "risk_score": f.risk_score, "risk_factors": list(f.risk_factors),
+                 "control_code": f.control_code}
+                for f in ordered[:5]
             ],
+            "correlations": list(self.correlations),
+            "findings": [f.to_dict() for f in ordered],
             "notes": list(self.notes),
         }

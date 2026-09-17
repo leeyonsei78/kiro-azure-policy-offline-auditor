@@ -31,6 +31,60 @@ _SENSITIVE_PORTS = {
 _MGMT_PORTS = {"22", "3389", "445", "23"}
 
 
+# ---------------------------------------------------------------------------
+# 개인정보(PII)·시크릿(자격증명) 탐지 패턴 (ISMS-P 개인정보 보호 강화)
+# 폐쇄망 전제로 정규식만 사용. 오탐을 줄이기 위해 형식이 뚜렷한 것만 탐지한다.
+# ---------------------------------------------------------------------------
+# (라벨, 정규식, 심각도)
+_PII_PATTERNS = [
+    # 주민등록번호: 6자리-7자리, 뒷자리 첫 숫자 1~4(내국인)/5~8(외국인)
+    ("주민등록번호", re.compile(r"\b\d{6}[-\s]?[1-8]\d{6}\b"), "CRITICAL"),
+    # 신용카드번호: 4-4-4-4 (공백/하이픈 허용). 이후 Luhn으로 2차 검증
+    ("신용카드번호", re.compile(r"\b(?:\d[ -]?){13,16}\b"), "CRITICAL"),
+    # 이메일
+    ("이메일주소", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "MEDIUM"),
+    # 휴대전화번호 (한국): 010-XXXX-XXXX 등
+    ("휴대전화번호", re.compile(r"\b01[016789][-\s]?\d{3,4}[-\s]?\d{4}\b"), "MEDIUM"),
+]
+
+# 시크릿/자격증명 하드코딩 패턴
+_SECRET_PATTERNS = [
+    ("AWS 액세스 키 ID", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "CRITICAL"),
+    ("AWS 시크릿 액세스 키", re.compile(r"(?i)aws_secret_access_key\s*[=:]\s*['\"]?[A-Za-z0-9/+=]{40}"), "CRITICAL"),
+    ("비밀번호 하드코딩", re.compile(r"(?i)(?:password|passwd|pwd)\s*[=:]\s*['\"]?[^\s'\";,}]{4,}"), "HIGH"),
+    ("커넥션 문자열 비밀번호", re.compile(r"(?i)(?:pwd|password)\s*=\s*[^;'\"\s]{4,}"), "HIGH"),
+    ("Bearer/JWT 토큰", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\b"), "HIGH"),
+    ("Private Key 블록", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"), "CRITICAL"),
+    ("Slack 토큰", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"), "HIGH"),
+    ("Azure 저장소 키(AccountKey)", re.compile(r"(?i)AccountKey\s*=\s*[A-Za-z0-9/+=]{40,}"), "CRITICAL"),
+]
+
+
+def _luhn_ok(number: str) -> bool:
+    """신용카드번호 Luhn 체크(오탐 감소). 숫자만 남겨 13~16자리일 때만 검증."""
+    digits = [int(c) for c in re.sub(r"\D", "", number)]
+    if not (13 <= len(digits) <= 16):
+        return False
+    total, alt = 0, False
+    for d in reversed(digits):
+        if alt:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+        alt = not alt
+    return total % 10 == 0
+
+
+def _mask(s: str) -> str:
+    """근거로 보여줄 때 민감값을 부분 마스킹(앞 2~4자만 노출)."""
+    s = s.strip()
+    if len(s) <= 4:
+        return "*" * len(s)
+    keep = 4 if len(s) > 8 else 2
+    return s[:keep] + "*" * (len(s) - keep)
+
+
 # 이슈 유형별 위반(bad)·개선(good) 예시 카탈로그.
 # 화면/리포트에서 "✗ 위반 예시 / ✓ 개선 예시"로 표시되어 조치 방향을 구체적으로 안내한다.
 _EXAMPLES: dict[str, dict[str, str]] = {
@@ -175,6 +229,14 @@ _EXAMPLES: dict[str, dict[str, str]] = {
         "bad": "CVE-2021-44228 등 알려진 취약점 식별자 존재",
         "good": "영향 자산 패치 적용, 패치 불가 시 WAF 규칙·네트워크 격리 등 완화",
     },
+    "pii_exposed": {
+        "bad": "로그/설정에 평문: 주민번호 900101-1234567, 이메일 hong@corp.com",
+        "good": "개인정보는 저장·로그에서 마스킹(9001**-*******)·암호화, 수집 최소화",
+    },
+    "secret_exposed": {
+        "bad": "코드/설정에 평문: password=P@ssw0rd!, AKIAIOSFODNN7EXAMPLE",
+        "good": "Secrets Manager/Key Vault로 이전, 코드엔 참조만, 노출 키 즉시 폐기·교체",
+    },
 }
 
 
@@ -264,9 +326,9 @@ _EXPLAIN: dict[str, dict[str, str]] = {
                       "3) 조직 계정이면 Organization Trail로 전 계정을 한 번에 기록합니다.",
     },
     "vpc_flowlogs_missing": {
-        "why": "네트워크 통신 기록(VPC Flow Logs)이 없습니다. 침해 시 어떤 IP가 어디로 접속했는지 확인할 수 "
-               "없어 사고 분석이 힘듭니다.",
-        "how_to_fix": "1) 각 VPC에 Flow Logs를 켜고 대상(CloudWatch Logs 또는 S3)을 지정합니다.\n"
+        "why": "네트워크 통신 기록(Flow Logs)이 없습니다. 침해 시 어떤 IP가 어디로 접속했는지 확인할 수 "
+               "없어 사고 분석이 힘듭니다. AWS에서는 VPC Flow Logs, Azure에서는 NSG Flow Logs를 활성화해야 합니다.",
+        "how_to_fix": "1) 각 VPC/NSG에 Flow Logs를 켜고 저장 대상(S3/CloudWatch 또는 Storage/Log Analytics)을 지정합니다.\n"
                       "2) 로그를 정기적으로 검토하거나 이상 탐지에 연동합니다.",
     },
     "aws_config_recorder_off": {
@@ -397,6 +459,22 @@ _EXPLAIN: dict[str, dict[str, str]] = {
         "how_to_fix": "1) 각 CVE의 심각도(CVSS)와 영향 범위를 확인합니다.\n"
                       "2) 패치가 있으면 우선순위대로 적용합니다.\n"
                       "3) 패치가 없으면 WAF 규칙·네트워크 격리 등 완화책을 적용합니다.",
+    },
+    "pii_exposed": {
+        "why": "주민등록번호·카드번호·이메일 같은 개인정보가 로그·설정·환경변수에 평문으로 남아 있습니다. "
+               "이런 곳은 접근 통제가 느슨해 유출 시 그대로 노출되고, ISMS-P·개인정보보호법 위반이 됩니다.",
+        "how_to_fix": "1) 해당 개인정보가 왜 여기 저장/기록되는지 원인을 찾습니다(로그 과다 기록 등).\n"
+                      "2) 로그·설정에서 개인정보를 제거하거나 마스킹(예: 뒷자리 ***)합니다.\n"
+                      "3) 저장이 꼭 필요하면 암호화(TDE/컬럼 암호화)하고 접근 권한을 최소화합니다.\n"
+                      "4) 개인정보 수집·보관 최소화 원칙을 적용합니다.",
+    },
+    "secret_exposed": {
+        "why": "비밀번호·API 키·토큰 같은 자격증명이 코드·설정·로그에 그대로 적혀 있습니다. "
+               "이 값이 유출되면 공격자가 바로 로그인·API 호출을 할 수 있어 계정 탈취로 직결됩니다.",
+        "how_to_fix": "1) 노출된 키·비밀번호를 즉시 폐기하고 새로 발급(rotate)합니다 — 이미 유출됐다고 가정.\n"
+                      "2) 시크릿을 AWS Secrets Manager / Azure Key Vault로 옮기고, 코드에서는 참조만 합니다.\n"
+                      "3) 소스 이력(git)에 남았으면 이력에서도 제거합니다.\n"
+                      "4) 커밋 전 시크릿 검사(pre-commit hook 등)를 도입합니다.",
     },
 }
 
@@ -557,11 +635,16 @@ _STEPS: dict[str, str] = {
         "  실제 필요한 권한은 IAM Access Analyzer의 '정책 생성'으로 최소 권한 정책을 만들어 부여"
     ),
     "vpc_flowlogs_missing": (
-        "[포털] AWS 콘솔 → VPC → 해당 VPC 선택 → '흐름 로그' 탭 → '흐름 로그 생성' "
+        "[AWS 포털] AWS 콘솔 → VPC → 해당 VPC 선택 → '흐름 로그' 탭 → '흐름 로그 생성' "
         "→ 필터 'All' → 대상(CloudWatch Logs 또는 S3) 지정 → '흐름 로그 생성'.\n"
-        "[CLI]\n"
+        "[AWS CLI]\n"
         "  aws ec2 create-flow-logs --resource-type VPC --resource-ids <VPC-ID> "
-        "--traffic-type ALL --log-destination-type s3 --log-destination arn:aws:s3:::<로그버킷>"
+        "--traffic-type ALL --log-destination-type s3 --log-destination arn:aws:s3:::<로그버킷>\n"
+        "[Azure 포털] Azure Portal → 'Network Watcher' → 'NSG 흐름 로그' → '+만들기' "
+        "→ 대상 NSG 선택 → 저장소 계정 지정 → 보존 기간 설정 → 만들기.\n"
+        "[Azure CLI]\n"
+        "  az network watcher flow-log create -g <RG> --nsg <NSG이름> -n <흐름로그이름> "
+        "--storage-account <저장소계정ID> --enabled true --retention 90"
     ),
     "aws_config_recorder_off": (
         "[포털] AWS 콘솔 → AWS Config → '설정' → '기록 켜기'(Recording on) → 기록할 리소스 유형 "
@@ -642,6 +725,23 @@ _STEPS: dict[str, str] = {
         "[Azure] Azure Update Manager로 VM 패치 적용:  az vm install-patches -g <RG> -n <VM> ...\n"
         "[AWS] SSM Patch Manager로 적용:  aws ssm send-command --document-name AWS-RunPatchBaseline ...\n"
         "3) 즉시 패치 불가 시 WAF 규칙 추가·네트워크 접근 차단 등 임시 완화."
+    ),
+    "pii_exposed": (
+        "[공통] 1) 개인정보가 발견된 위치(로그 파일·설정·환경변수)를 특정합니다.\n"
+        "2) 로그의 경우: 애플리케이션 로깅에서 개인정보 필드를 마스킹하거나 기록하지 않도록 코드를 수정합니다.\n"
+        "3) 이미 저장된 로그는 삭제 또는 마스킹 처리합니다.\n"
+        "[Azure] 저장 데이터는 SQL TDE + 컬럼 암호화(Always Encrypted), 로그는 Log Analytics 접근권한 최소화.\n"
+        "[AWS] RDS 암호화 + 필드 암호화, CloudWatch Logs 접근 IAM 최소화.\n"
+        "4) 개인정보 영향평가(PIA)·수집 최소화 원칙을 점검합니다."
+    ),
+    "secret_exposed": (
+        "[즉시] 1) 노출된 키/비밀번호를 즉시 무효화하고 새로 발급합니다(유출 가정).\n"
+        "[Azure] az keyvault secret set 으로 Key Vault에 저장 → 앱은 Managed Identity로 참조.\n"
+        "  az keyvault secret set --vault-name <키볼트> --name <이름> --value <새값>\n"
+        "[AWS] Secrets Manager에 저장 → 앱은 IAM 역할로 참조.\n"
+        "  aws secretsmanager create-secret --name <이름> --secret-string <새값>\n"
+        "2) 코드/설정에서 하드코딩 값을 제거하고 시크릿 저장소 참조로 교체합니다.\n"
+        "3) git 이력에 남았으면 이력에서도 제거(git filter-repo 등)하고, 커밋 전 시크릿 스캔을 도입합니다."
     ),
 }
 
@@ -1351,13 +1451,27 @@ def _check_raw_text(text: str, findings: list[Finding], existing_types: set, hin
             "CloudTrail 추적 미구성/부분 구성",
             "다중 리전 CloudTrail 추적이 구성되지 않아 감사 로그 사각지대가 있습니다.", platform="aws",
             evidence=_snippet(text, r"ismultiregion[^,}\n]*false", r"no trail", r"cloudtrail"))
-    # VPC Flow Logs 미구성 (AWS)
-    if re.search(r"flow[- ]?logs?", low) and re.search(r"\[\s*\]|\"?flowlogstatus\"?\s*[:=]\s*\"?inactive|no flow log", low):
+    # Flow Logs 미구성 (AWS VPC Flow Logs / Azure NSG Flow Logs — 입력에서 플랫폼 자동 구분)
+    if re.search(r"flow[- ]?logs?", low) and re.search(r"\[\s*\]|\"?flowlogstatus\"?\s*[:=]\s*\"?inactive|no flow log|not configured|enabled.{0,6}false", low):
+        # Azure 키워드가 함께 있으면 Azure NSG Flow Logs
+        is_azure_flow = bool(re.search(r"nsg|networkwatcher|microsoft\.network|az\s+network|network-watcher", low))
+        is_aws_flow = bool(re.search(r"\bvpc\b|\bec2\b|\baws\b", low))
+        if is_azure_flow and not is_aws_flow:
+            flow_plat = "azure"
+            flow_title = "NSG Flow Logs 미구성/비활성"
+            flow_desc = "NSG Flow Logs가 구성되지 않았거나 비활성 상태로, 네트워크 트래픽 감사 사각지대가 있습니다."
+        elif is_aws_flow and not is_azure_flow:
+            flow_plat = "aws"
+            flow_title = "VPC Flow Logs 미구성/비활성"
+            flow_desc = "VPC Flow Logs가 구성되지 않았거나 비활성(INACTIVE) 상태로, 네트워크 트래픽 감사 사각지대가 있습니다."
+        else:
+            # 명확하지 않으면 전체 플랫폼 힌트 사용
+            flow_plat = plat
+            flow_title = ("NSG" if plat == "azure" else "VPC") + " Flow Logs 미구성/비활성"
+            flow_desc = "Flow Logs가 구성되지 않았거나 비활성 상태로, 네트워크 트래픽 감사 사각지대가 있습니다."
         add("2.9.4", "vpc_flowlogs_missing", Severity.MEDIUM,
-            "VPC Flow Logs 미구성/비활성",
-            "VPC Flow Logs가 구성되지 않았거나 비활성(INACTIVE) 상태로, 네트워크 트래픽 감사 사각지대가 있습니다.",
-            platform="aws",
-            evidence=_snippet(text, r"flowlogstatus[^,}\n]*inactive", r"no flow log", r"flow[- ]?logs?"))
+            flow_title, flow_desc, platform=flow_plat,
+            evidence=_snippet(text, r"flowlogstatus[^,}\n]*inactive", r"no flow log", r"enabled[^,}\n]*false", r"flow[- ]?logs?"))
     # AWS Config 레코더 비활성 (AWS)
     if re.search(r"configurationrecorder|config.{0,10}recorder", low) and \
             re.search(r'"?recording"?\s*[:=]\s*(false|0)|\[\s*\]|not recording', low):
@@ -1415,6 +1529,61 @@ def _check_raw_text(text: str, findings: list[Finding], existing_types: set, hin
             platform=plat, evidence=cve_sample, resource=f"{len(unique)}건",
         ))
 
+    # ── 개인정보(PII) 노출 탐지 (ISMS-P 개인정보 보호) ──
+    if "pii_exposed" not in existing_types:
+        pii_hits: dict[str, list[str]] = {}
+        for label, pat, _sev in _PII_PATTERNS:
+            for m in pat.finditer(text):
+                val = m.group(0)
+                # 신용카드는 Luhn 통과분만 인정(오탐 감소)
+                if label == "신용카드번호" and not _luhn_ok(val):
+                    continue
+                pii_hits.setdefault(label, [])
+                if len(pii_hits[label]) < 5 and val not in pii_hits[label]:
+                    pii_hits[label].append(val)
+        if pii_hits:
+            # 심각도: 주민번호/카드번호 있으면 CRITICAL, 이메일/전화만이면 MEDIUM
+            has_critical = any(k in pii_hits for k in ("주민등록번호", "신용카드번호"))
+            sev = Severity.CRITICAL if has_critical else Severity.MEDIUM
+            summary = ", ".join(f"{k} {len(v)}건" for k, v in pii_hits.items())
+            masked = "; ".join(
+                f"{k}: " + ", ".join(_mask(x) for x in v[:3]) for k, v in pii_hits.items()
+            )
+            existing_types.add("pii_exposed")
+            findings.append(_finding(
+                "2.7.1", "pii_exposed", sev,
+                f"개인정보 평문 노출 의심 ({summary})",
+                f"입력(정책·설정·로그)에서 개인정보로 보이는 값이 발견되었습니다: {summary}. "
+                "개인정보가 로그·구성 파일·환경변수 등에 평문으로 남아 있으면 유출 위험이 큽니다.",
+                platform=plat, evidence=masked, resource=summary,
+            ))
+
+    # ── 시크릿/자격증명 하드코딩 탐지 ──
+    if "secret_exposed" not in existing_types:
+        secret_hits: dict[str, list[str]] = {}
+        worst = Severity.MEDIUM
+        for label, pat, sev_name in _SECRET_PATTERNS:
+            for m in pat.finditer(text):
+                secret_hits.setdefault(label, [])
+                if len(secret_hits[label]) < 3:
+                    secret_hits[label].append(m.group(0))
+                s = Severity.from_name(sev_name)
+                if s > worst:
+                    worst = s
+        if secret_hits:
+            summary = ", ".join(f"{k} {len(v)}건" for k, v in secret_hits.items())
+            masked = "; ".join(
+                f"{k}: " + ", ".join(_mask(x) for x in v[:2]) for k, v in secret_hits.items()
+            )
+            existing_types.add("secret_exposed")
+            findings.append(_finding(
+                "2.7.2", "secret_exposed", worst,
+                f"시크릿·자격증명 하드코딩 의심 ({summary})",
+                f"입력에서 하드코딩된 자격증명으로 보이는 값이 발견되었습니다: {summary}. "
+                "키·비밀번호·토큰이 코드·설정·로그에 노출되면 계정 탈취로 직결됩니다.",
+                platform=plat, evidence=masked, resource=summary,
+            ))
+
 
 # ===========================================================================
 # 엔트리
@@ -1438,6 +1607,138 @@ def _overall_platform_hint(text: str, objects: list) -> str | None:
     return "aws" if votes["aws"] > votes["azure"] else "azure"
 
 
+# 심각도별 위험 기본 점수(0~100 스케일의 출발점)
+_SEV_BASE = {
+    Severity.CRITICAL: 60,
+    Severity.HIGH: 45,
+    Severity.MEDIUM: 25,
+    Severity.LOW: 10,
+    Severity.INFO: 0,
+}
+
+# 이슈 유형별 '인터넷 직접 노출' 성격(외부에서 바로 도달 가능 → 위험 가중 최대)
+_INTERNET_EXPOSED_TYPES = {
+    "aws_sg_open_sensitive_port", "aws_sg_open_any", "aws_rds_public",
+    "aws_s3_public_block_off", "aws_s3_public_policy", "aws_ebs_snapshot_public",
+    "nsg_open_sensitive_port", "nsg_open_all_ports", "nsg_open_any",
+    "storage_public_blob", "webapp_https_disabled", "sql_public_access",
+}
+# 민감 데이터/자격증명 직접 노출 성격
+_DATA_EXPOSURE_TYPES = {
+    "pii_exposed", "secret_exposed", "aws_root_access_key",
+    "aws_s3_no_encryption", "sql_tde_disabled",
+}
+# 인증·계정 통제 약화 성격
+_AUTH_WEAK_TYPES = {
+    "aws_iam_no_mfa", "aws_iam_wildcard_admin", "mfa_ca_disabled",
+    "rbac_privileged_assignment", "aws_root_access_key",
+}
+
+
+def _compute_risk(f: Finding) -> None:
+    """조치 우선순위용 위험 점수(0~100)와 가중 근거를 산정해 Finding에 기록.
+
+    심각도 기본점수 + 상황 가중치(인터넷 노출/민감데이터/인증약화/관리포트 등).
+    """
+    score = _SEV_BASE.get(f.severity, 0)
+    factors: list[str] = []
+    low = (f.evidence + " " + f.description + " " + f.title).lower()
+
+    if f.issue_type in _INTERNET_EXPOSED_TYPES or "0.0.0.0/0" in low or "internet" in low or "public" in low:
+        score += 20
+        factors.append("인터넷 직접 노출")
+    if f.issue_type in _DATA_EXPOSURE_TYPES:
+        score += 18
+        factors.append("민감데이터/자격증명 노출")
+    if f.issue_type in _AUTH_WEAK_TYPES:
+        score += 12
+        factors.append("인증·계정 통제 약화")
+    # 관리 포트(SSH/RDP) 개방은 즉시 악용 위험
+    if any(f"({_SENSITIVE_PORTS[p]})" in low or f"'{p}'" in low or f'"{p}"' in low
+           for p in _MGMT_PORTS):
+        if "port" in low or "포트" in low or f.issue_type.endswith("sensitive_port"):
+            score += 8
+            factors.append("관리포트(SSH/RDP) 개방")
+    # 암호화 미적용
+    if "암호화" in f.title or "encrypt" in low or f.issue_type in ("sql_tde_disabled", "aws_s3_no_encryption"):
+        if f.issue_type not in _DATA_EXPOSURE_TYPES:
+            score += 6
+            factors.append("암호화 미적용")
+
+    f.risk_score = max(0, min(100, score))
+    f.risk_factors = factors
+
+
+# 상관 분석 규칙: (필요 이슈유형 집합, 제목, 설명/공격경로, 권고)
+# 개별로는 중간이어도 '조합'되면 실제 침해 경로가 되는 위험을 별도로 경고한다.
+_CORRELATION_RULES = [
+    {
+        "need": {"aws_sg_open_sensitive_port", "aws_iam_no_mfa"},
+        "any": False,
+        "title": "공격 경로: 관리포트 개방 + MFA 없는 계정",
+        "path": "인터넷에 열린 SSH/RDP로 접속 시도 → MFA 없는 IAM 계정 비밀번호 탈취 → 내부 침투. "
+                "두 취약점이 결합하면 외부에서 서버까지 한 번에 뚫릴 수 있습니다.",
+        "fix": "① 관리포트 출발지를 제한(Bastion/SSM)하고 ② 모든 콘솔 계정에 MFA를 강제하세요.",
+    },
+    {
+        "need": {"nsg_open_sensitive_port", "mfa_ca_disabled"},
+        "any": False,
+        "title": "공격 경로: NSG 관리포트 개방 + MFA 미강제",
+        "path": "인터넷에 열린 RDP/SSH → MFA 없는 계정으로 로그인 → VM 장악. "
+                "네트워크 노출과 약한 인증이 겹쳐 침해 가능성이 큽니다.",
+        "fix": "① NSG 출발지를 제한(Azure Bastion/JIT)하고 ② Conditional Access로 MFA를 강제하세요.",
+    },
+    {
+        "need": {"aws_s3_public_block_off", "aws_s3_no_encryption"},
+        "any": False,
+        "title": "공격 경로: S3 퍼블릭 노출 + 암호화 없음",
+        "path": "퍼블릭 접근이 열린 버킷의 데이터가 암호화도 안 돼 있어, 유출 시 내용이 그대로 노출됩니다(데이터 유출 직결).",
+        "fix": "① Block Public Access 4종을 켜고 ② 기본 암호화(SSE-KMS)를 적용하세요.",
+    },
+    {
+        "need": {"storage_public_blob", "pii_exposed"},
+        "any": False,
+        "title": "공격 경로: 퍼블릭 저장소 + 개인정보 노출",
+        "path": "익명 접근이 열린 저장소에 개인정보가 있어, 외부에서 개인정보를 그대로 조회할 수 있습니다(개인정보 유출·법 위반).",
+        "fix": "① 퍼블릭 Blob 접근을 끄고 ② 개인정보를 마스킹/암호화하며 저장 최소화하세요.",
+    },
+    {
+        "need": {"aws_rds_public"},
+        "with_any": {"pii_exposed", "aws_s3_no_encryption", "sql_tde_disabled"},
+        "title": "공격 경로: 퍼블릭 DB + 데이터 보호 미흡",
+        "path": "인터넷에서 접근 가능한 데이터베이스에 민감데이터·미암호화가 겹쳐, 유출 표적이 됩니다.",
+        "fix": "① DB 퍼블릭 접근을 차단하고 ② 저장 암호화·개인정보 보호 조치를 적용하세요.",
+    },
+    {
+        "need": {"secret_exposed"},
+        "with_any": {"aws_iam_wildcard_admin", "rbac_privileged_assignment", "aws_root_access_key"},
+        "title": "공격 경로: 자격증명 노출 + 과다 권한",
+        "path": "노출된 시크릿이 과다 권한 계정의 것이면, 탈취 시 계정·구독 전체가 장악됩니다(권한 상승·전면 침해).",
+        "fix": "① 노출 시크릿을 즉시 폐기·교체하고 ② 최소권한 원칙으로 권한을 축소하세요.",
+    },
+]
+
+
+def _correlate(findings: list[Finding]) -> list[dict]:
+    """개별 이슈들의 조합으로 성립하는 복합 위험(공격 경로)을 산출."""
+    types = {f.issue_type for f in findings}
+    out: list[dict] = []
+    for rule in _CORRELATION_RULES:
+        need = rule.get("need", set())
+        if not need.issubset(types):
+            continue
+        with_any = rule.get("with_any")
+        if with_any and not (with_any & types):
+            continue
+        out.append({
+            "title": rule["title"],
+            "attack_path": rule["path"],
+            "recommendation": rule["fix"],
+            "related_types": sorted(need | (with_any & types if with_any else set())),
+        })
+    return out
+
+
 def analyze(text: str) -> AuditReport:
     """입력 텍스트 전체를 검토해 AuditReport 반환(AWS/Azure 자동 구분)."""
     parsed = parse(text)
@@ -1456,6 +1757,13 @@ def analyze(text: str) -> AuditReport:
     # 2) 원시 텍스트 폴백(이미 잡힌 issue_type은 억제)
     existing_types = {f.issue_type for f in findings}
     _check_raw_text(parsed["raw_text"], findings, existing_types, hint or "azure")
+
+    # 3) 위험 점수 산정(조치 우선순위)
+    for f in findings:
+        _compute_risk(f)
+
+    # 4) 상관 분석(복합 위험 경로)
+    report.correlations = _correlate(findings)
 
     report.findings = findings
     if not findings:
