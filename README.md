@@ -219,6 +219,35 @@ aws cloudtrail describe-trails --output json                          >> aws.txt
 
 자동 검출은 입력에 포함된 리소스에 한합니다. 텍스트만 있는 항목(진단·백업·패치 등)은 키워드로 보완 탐지합니다.
 
+## CIS Benchmark 기반 위반·취약점 점검 (확장)
+
+실무에서 가장 자주 지적되는 위반을 잡아내도록 CIS AWS/Azure Foundations Benchmark를 참고해
+수집 명령어와 자동 탐지 로직을 보강했습니다.
+
+**AWS**
+
+| 점검 대상 | ISMS-P | 탐지 내용 |
+|------|:------:|-----------|
+| 보안그룹 SSH/RDP 개방 | 2.6.1 | 0.0.0.0/0에서 22·3389 포트 인바운드 허용 |
+| RDS 퍼블릭 접근 | 2.6.1 | `PubliclyAccessible=true`(DB 인터넷 노출) |
+| S3 퍼블릭 노출 | 2.7.1 | Block Public Access 미설정·ACL(AllUsers)·퍼블릭 정책 |
+| EBS 스냅샷 공개 | 2.7.1 | 볼륨 생성 권한이 `all`(전체 공개) |
+| CloudTrail 로그 암호화·VPC Flow Logs·Config | 2.9.4/2.10.2 | KMS 미암호화 추적, Flow Logs 미구성, Config 레코더 비활성 |
+| root 액세스키·시크릿 로테이션 | 2.5.6 | root 액세스키 존재, Secrets Manager 로테이션 미설정 |
+
+**Azure**
+
+| 점검 대상 | ISMS-P | 탐지 내용 |
+|------|:------:|-----------|
+| NSG SSH/RDP 개방 | 2.6.1 | 인터넷에서 22·3389 포트 인바운드 허용 |
+| Storage 퍼블릭 Blob·HTTPS·TLS | 2.7.1 | `allowBlobPublicAccess=true`, HTTP 허용, TLS 1.2 미만 |
+| App Service HTTPS 전용 미설정 | 2.7.1 | `httpsOnly=false`(평문 접근 허용) |
+| 디스크 CMK 미적용 | 2.7.1 | 플랫폼 관리 키만 사용(규제 시 CMK 필요) |
+| Defender for Cloud 플랜 | 2.11.2 | 리소스 유형별 Defender 요금제 활성화 상태 |
+| 관리 ID·특권 계정 | 2.5.5 | VM 관리 ID 미사용, Owner 광범위 부여 |
+
+> AWS·Azure 리소스가 한 입력에 섞여 있어도 각 위반을 개별적으로 탐지합니다.
+
 ## 프로젝트 구조
 
 ```

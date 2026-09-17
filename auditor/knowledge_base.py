@@ -78,7 +78,7 @@ CONTROLS: list[dict] = [
             "entra"
         ],
         "azure": {
-            "cmd": "az role assignment list --role \"Owner\" --all -o table\naz rest --method get --url \"https://graph.microsoft.com/v1.0/directoryRoles\"",
+            "cmd": "az role assignment list --role \"Owner\" --all -o table\naz rest --method get --url \"https://graph.microsoft.com/v1.0/directoryRoles\"\naz vm list --query \"[?identity==null].[name,resourceGroup]\" -o table\naz role assignment list --all --include-classic-administrators --query \"[?roleDefinitionName=='Owner' && principalType=='User']\" -o table",
             "criteria": "구독 Owner 역할이 다수 사용자·그룹에 광범위 부여, 전역 관리자(Global Administrator) 인원이 권고 범위(2~4명)를 초과하고 상시 활성 상태로 유지됨",
             "fix": "Reader·Contributor 등 세분화된 RBAC 역할과 사용자 지정 역할로 전환, 전역 관리자는 최소 인원만 유지하고 PIM으로 필요시(Just-In-Time) 승격 방식 적용"
         },
@@ -102,7 +102,7 @@ CONTROLS: list[dict] = [
             "fix": "서비스 프린시펄은 관리 ID(Managed Identity) 또는 인증서로 전환, 부득이 시크릿 사용 시 수명을 180일 이하로 단축, Entra ID Access Reviews를 분기 단위로 자동화"
         },
         "aws": {
-            "cmd": "aws iam get-credential-report --query 'Content' --output text | base64 --decode\naws iam list-access-keys --user-name USER_NAME\naws accessanalyzer list-findings",
+            "cmd": "aws iam get-credential-report --query 'Content' --output text | base64 --decode\naws iam list-access-keys --user-name USER_NAME\naws accessanalyzer list-findings\naws iam get-account-summary --query 'SummaryMap.AccountAccessKeysPresent'\naws secretsmanager list-secrets --query \"SecretList[?RotationEnabled==\\`false\\`].[Name]\"",
             "criteria": "액세스 키 생성 후 90일 이상 미교체, 사용하지 않는 액세스 키가 활성 상태로 존재, Access Analyzer가 외부 계정·퍼블릭 공유 리소스를 탐지",
             "fix": "액세스 키 90일 주기 교체 및 미사용 키 즉시 삭제, IAM Access Analyzer 상시 활성화, 분기별 권한 검토(Access Review) 절차 수립"
         }
@@ -115,12 +115,12 @@ CONTROLS: list[dict] = [
             "nsg"
         ],
         "azure": {
-            "cmd": "az network nsg list -o table\naz network nsg rule list --nsg-name NSG_NAME -g RESOURCE_GROUP --query \"[?sourceAddressPrefix=='*']\"",
+            "cmd": "az network nsg list -o table\naz network nsg rule list --nsg-name NSG_NAME -g RESOURCE_GROUP --query \"[?sourceAddressPrefix=='*']\"\naz network nsg rule list --nsg-name NSG_NAME -g RESOURCE_GROUP --query \"[?direction=='Inbound' && access=='Allow' && (sourceAddressPrefix=='*' || sourceAddressPrefix=='0.0.0.0/0' || sourceAddressPrefix=='Internet') && (destinationPortRange=='22' || contains(destinationPortRanges, '22'))]\"\naz network nsg rule list --nsg-name NSG_NAME -g RESOURCE_GROUP --query \"[?direction=='Inbound' && access=='Allow' && (sourceAddressPrefix=='*' || sourceAddressPrefix=='0.0.0.0/0' || sourceAddressPrefix=='Internet') && (destinationPortRange=='3389' || contains(destinationPortRanges, '3389'))]\"",
             "criteria": "NSG 규칙의 Source가 Any(*)로 설정되어 인터넷 전체로부터 인바운드가 허용됨, 특히 22·3389 포트가 전면 개방",
             "fix": "NSG Source를 특정 IP·서비스 태그로 제한, Azure Bastion 또는 Just-In-Time VM Access(Defender for Cloud) 적용, Azure Policy로 Any 허용 규칙 탐지·차단"
         },
         "aws": {
-            "cmd": "aws ec2 describe-security-groups --query \"SecurityGroups[?IpPermissions[?IpRanges[?CidrIp=='0.0.0.0/0']]].[GroupId,GroupName]\"",
+            "cmd": "aws ec2 describe-security-groups --query \"SecurityGroups[?IpPermissions[?IpRanges[?CidrIp=='0.0.0.0/0']]].[GroupId,GroupName]\"\naws ec2 describe-security-groups --query \"SecurityGroups[?IpPermissions[?FromPort==\\`22\\` && IpRanges[?CidrIp=='0.0.0.0/0']]].[GroupId,GroupName]\"\naws ec2 describe-security-groups --query \"SecurityGroups[?IpPermissions[?FromPort==\\`3389\\` && IpRanges[?CidrIp=='0.0.0.0/0']]].[GroupId,GroupName]\"\naws rds describe-db-instances --query \"DBInstances[?PubliclyAccessible==\\`true\\`].[DBInstanceIdentifier,Endpoint.Address]\"",
             "criteria": "0.0.0.0/0(Any)로부터 전체 포트 또는 관리 포트(22, 3389, 3306, 5432 등)가 인바운드로 열려 있음",
             "fix": "보안그룹 인바운드를 업무상 필요한 출발지 IP·대역으로 제한, 관리 포트는 사내 VPN·Bastion 대역만 허용, AWS Config 규칙(restricted-ssh 등)으로 상시 탐지"
         }
@@ -174,12 +174,12 @@ CONTROLS: list[dict] = [
             "tls"
         ],
         "azure": {
-            "cmd": "az disk list --query \"[?encryption.type=='EncryptionAtRestWithPlatformKey']\" -o table\naz storage account show -n STORAGE_ACCOUNT --query \"encryption\"\naz sql db tde show -g RESOURCE_GROUP -s SQL_SERVER -n DB_NAME",
+            "cmd": "az disk list --query \"[?encryption.type=='EncryptionAtRestWithPlatformKey']\" -o table\naz storage account show -n STORAGE_ACCOUNT --query \"encryption\"\naz sql db tde show -g RESOURCE_GROUP -s SQL_SERVER -n DB_NAME\naz storage account list --query \"[].{name:name, publicBlob:allowBlobPublicAccess, https:enableHttpsTrafficOnly, tls:minimumTlsVersion}\" -o table\naz storage account show -n STORAGE_ACCOUNT --query \"{publicBlob:allowBlobPublicAccess, https:enableHttpsTrafficOnly, tls:minimumTlsVersion}\"\naz webapp list --query \"[?httpsOnly==\\`false\\`].[name,defaultHostName]\" -o table",
             "criteria": "SQL Database의 TDE(투명한 데이터 암호화)가 Disabled 상태, 규제상 고객관리키(CMK)가 요구되는 자원에 플랫폼 기본 키만 적용되어 있음",
             "fix": "비활성화된 DB의 TDE 즉시 재활성화, 규제상 요구되는 자원은 Key Vault 연동 Customer-Managed Key로 전환, Storage Service Encryption 적용 여부 상시 확인"
         },
         "aws": {
-            "cmd": "aws ec2 describe-volumes --query 'Volumes[?Encrypted==`false`].VolumeId'\naws s3api get-bucket-encryption --bucket BUCKET_NAME\naws rds describe-db-instances --query 'DBInstances[?StorageEncrypted==`false`].DBInstanceIdentifier'",
+            "cmd": "aws ec2 describe-volumes --query 'Volumes[?Encrypted==`false`].VolumeId'\naws s3api get-bucket-encryption --bucket BUCKET_NAME\naws rds describe-db-instances --query 'DBInstances[?StorageEncrypted==`false`].DBInstanceIdentifier'\naws s3api list-buckets --query 'Buckets[*].Name'\naws s3api get-public-access-block --bucket BUCKET_NAME\naws s3api get-bucket-acl --bucket BUCKET_NAME --query \"Grants[?Grantee.URI=='http://acs.amazonaws.com/groups/global/AllUsers']\"\naws s3api get-bucket-policy-status --bucket BUCKET_NAME --query 'PolicyStatus.IsPublic'",
             "criteria": "EBS 볼륨·RDS·S3 버킷 중 암호화가 적용되지 않은 자원이 존재(특히 개인정보·중요정보 저장소), get-bucket-encryption 조회 시 NoSuchEncryption 오류 반환",
             "fix": "계정 단위 EBS 기본 암호화 활성화, S3 기본 암호화(SSE-S3·SSE-KMS)를 강제하고 버킷 정책으로 미암호화 업로드 거부, RDS는 스냅샷 복사 후 암호화 옵션으로 재생성"
         }
@@ -216,7 +216,7 @@ CONTROLS: list[dict] = [
             "fix": "전 구독·핵심 리소스에 Diagnostic Settings를 Log Analytics·Storage Account로 연동, Storage 수명주기 정책으로 장기보관(2년 이상), Azure Policy(Deploy if not exists)로 진단설정 강제"
         },
         "aws": {
-            "cmd": "aws cloudtrail describe-trails --query \"trailList[*].[Name,IsMultiRegionTrail,IsOrganizationTrail]\"\naws cloudtrail get-trail-status --name TRAIL_NAME\naws cloudtrail get-event-selectors --trail-name TRAIL_NAME",
+            "cmd": "aws cloudtrail describe-trails --query \"trailList[*].[Name,IsMultiRegionTrail,IsOrganizationTrail]\"\naws cloudtrail get-trail-status --name TRAIL_NAME\naws cloudtrail get-event-selectors --trail-name TRAIL_NAME\naws cloudtrail describe-trails --query \"trailList[?KmsKeyId==null].[Name]\"\naws s3api get-public-access-block --bucket LOG_BUCKET\naws ec2 describe-flow-logs --query \"FlowLogs[*].[FlowLogId,ResourceId,FlowLogStatus]\"\naws configservice describe-configuration-recorder-status --query \"ConfigurationRecordersStatus[*].[name,recording]\"",
             "criteria": "CloudTrail이 일부 리전에서 비활성화되어 있거나 IsMultiRegionTrail이 false, 로그 보관 기간이 법정 요구(접속기록 2년 이상 등)에 미달",
             "fix": "전 리전 CloudTrail 활성화 및 Organizations 단위 통합 추적 구성, S3 로그 버킷에 수명주기 정책으로 법정 보관기간 이상 보존, CloudWatch Logs 연동으로 실시간 모니터링"
         }
@@ -287,12 +287,12 @@ CONTROLS: list[dict] = [
             "assessment"
         ],
         "azure": {
-            "cmd": "az security assessment list --query \"[?status.code=='Unhealthy']\"\naz security sub-assessment list",
+            "cmd": "az security assessment list --query \"[?status.code=='Unhealthy']\"\naz security sub-assessment list\naz security pricing list --query \"value[].{name:name, tier:pricingTier}\" -o table",
             "criteria": "Defender for Cloud 취약점 평가가 일부 리소스에 구성되지 않음, Unhealthy 평가 항목이 장기간 조치되지 않고 누적됨",
             "fix": "Defender for Servers·Containers 등 플랜을 활성화해 취약점 스캔을 자동화, Unhealthy 항목을 SLA로 관리하고 Secure Score에 반영, 월 1회 이상 취약점 리포트 검토"
         },
         "aws": {
-            "cmd": "aws inspector2 batch-get-account-status\naws inspector2 list-findings --filter-criteria '{\"severity\":[{\"comparison\":\"EQUALS\",\"value\":\"CRITICAL\"}]}'",
+            "cmd": "aws inspector2 batch-get-account-status\naws inspector2 list-findings --filter-criteria '{\"severity\":[{\"comparison\":\"EQUALS\",\"value\":\"CRITICAL\"}]}'\naws ec2 describe-snapshots --owner-ids self --query \"Snapshots[*].SnapshotId\" | xargs -I{} aws ec2 describe-snapshot-attribute --snapshot-id {} --attribute createVolumePermission --query \"CreateVolumePermission[?Group=='all']\"\naws lambda list-functions --query \"Functions[*].[FunctionName,Runtime]\"",
             "criteria": "Inspector2가 일부 계정·리전에서 비활성화되어 있음, CRITICAL·HIGH 등급 취약점이 장기간 조치되지 않은 채 방치됨",
             "fix": "전 계정·리전에 Inspector2 활성화(EC2·ECR·Lambda 스캔), 취약점 등급별 조치 SLA(예: Critical 7일 이내)를 수립하고 티켓 시스템과 연동, 정기 리포트로 경영진 보고"
         }

@@ -82,7 +82,8 @@ def _looks_like(d: dict, *type_hints: str) -> bool:
 _AWS_KEYS = ("groupid", "ippermissions", "cidrip", "iprotocol", "fromport", "toport",
              "policydocument", "attachedpolicies", "publicaccessblockconfiguration",
              "blockpublicacls", "serversideencryptionconfiguration", "mfaactive",
-             "accesskeymetadata", "awsaccountid")
+             "accesskeymetadata", "awsaccountid", "dbinstanceidentifier",
+             "publiclyaccessible", "snapshotid", "createvolumepermission")
 _AZURE_KEYS = ("sourceaddressprefix", "destinationportrange", "enablesoftdelete",
                "enablepurgeprotection", "supportshttpstrafficonly", "allowblobpublicaccess",
                "roledefinitionname", "principalname", "publicnetworkaccess", "minimumtlsversion")
@@ -503,8 +504,47 @@ def _check_aws_iam_obj(d: dict, findings: list[Finding], seen: set) -> None:
         ))
 
 
+def _check_aws_rds_obj(d: dict, findings: list[Finding]) -> None:
+    """AWS RDS 인스턴스(2.6.1). 퍼블릭 접근 허용."""
+    pub = _val(d, "PubliclyAccessible", "publiclyAccessible")
+    if pub is True or str(pub).lower() == "true":
+        name = str(_val(d, "DBInstanceIdentifier", "dbInstanceIdentifier", default="") or "")
+        findings.append(_finding(
+            "2.6.1", "aws_rds_public", Severity.HIGH,
+            f"RDS 인스턴스 퍼블릭 접근 허용: {name or '(인스턴스미상)'}",
+            "RDS 데이터베이스가 PubliclyAccessible=true로 설정되어 인터넷에서 직접 접근 가능합니다.",
+            platform="aws", evidence=json.dumps(d, ensure_ascii=False), resource=name,
+            recommendation="RDS의 퍼블릭 접근을 비활성화하고, 프라이빗 서브넷 배치 + 보안그룹으로 접근 출발지를 제한하세요.",
+        ))
+
+
+def _check_aws_ebs_snapshot_obj(d: dict, findings: list[Finding]) -> None:
+    """AWS EBS 스냅샷(2.7.1). createVolumePermission이 all(공개)."""
+    perms = _val(d, "CreateVolumePermission", "createVolumePermission")
+    if isinstance(perms, dict):
+        perms = [perms]
+    if isinstance(perms, list):
+        for p in perms:
+            if isinstance(p, dict) and str(_val(p, "Group", "group", default="")).lower() == "all":
+                sid = str(_val(d, "SnapshotId", "snapshotId", default="") or "")
+                findings.append(_finding(
+                    "2.7.1", "aws_ebs_snapshot_public", Severity.HIGH,
+                    f"EBS 스냅샷 퍼블릭 공개: {sid or '(스냅샷미상)'}",
+                    "EBS 스냅샷의 볼륨 생성 권한이 all(전체 공개)로 설정되어 누구나 데이터 복원이 가능합니다.",
+                    platform="aws", evidence=json.dumps(d, ensure_ascii=False), resource=sid,
+                    recommendation="스냅샷 공유를 비공개로 변경하고, 필요한 경우 특정 계정에만 공유하세요.",
+                ))
+                return
+
+
 def _check_aws_object(d: dict, findings: list[Finding], seen: set) -> None:
     """AWS 리소스 dict 라우팅."""
+    if _val(d, "PubliclyAccessible", "publiclyAccessible") is not None \
+            and _val(d, "DBInstanceIdentifier", "dbInstanceIdentifier", "Engine", "engine") is not None:
+        _check_aws_rds_obj(d, findings)
+    if _val(d, "CreateVolumePermission", "createVolumePermission") is not None \
+            or (_val(d, "SnapshotId", "snapshotId") is not None and _val(d, "CreateVolumePermission", "createVolumePermission") is not None):
+        _check_aws_ebs_snapshot_obj(d, findings)
     if _val(d, "IpPermissions", "ipPermissions") is not None or (
         _val(d, "GroupId", "groupId") is not None and _val(d, "IpPermissions", "ipPermissions") is not None
     ):
@@ -523,11 +563,49 @@ def _check_aws_object(d: dict, findings: list[Finding], seen: set) -> None:
 # ===========================================================================
 # Azure 리소스 dict 라우팅
 # ===========================================================================
+def _check_azure_webapp_obj(d: dict, findings: list[Finding]) -> None:
+    """Azure App Service(2.7.1). httpsOnly=false → 평문 접근 허용."""
+    https_only = _val(d, "httpsOnly", "httpsonly")
+    if https_only is False or str(https_only).lower() == "false":
+        name = str(_val(d, "name", default="") or _val(d, "defaultHostName", default="") or "")
+        findings.append(_finding(
+            "2.7.1", "webapp_https_disabled", Severity.MEDIUM,
+            f"App Service HTTPS 전용 미설정: {name or '(앱미상)'}",
+            "App Service(웹앱)가 httpsOnly=false로 HTTP 평문 접근을 허용합니다.",
+            platform="azure", evidence=json.dumps(d, ensure_ascii=False), resource=name,
+            recommendation="App Service의 'HTTPS Only'를 활성화하고 최소 TLS 버전을 1.2로 설정하세요.",
+        ))
+
+
+def _check_azure_disk_obj(d: dict, findings: list[Finding]) -> None:
+    """Azure 관리 디스크(2.7.1). 플랫폼 관리 키만 사용(CMK 미적용)."""
+    enc = _val(d, "encryption")
+    etype = ""
+    if isinstance(enc, dict):
+        etype = str(_val(enc, "type", default=""))
+    if etype == "EncryptionAtRestWithPlatformKey":
+        name = str(_val(d, "name", default="") or "")
+        findings.append(_finding(
+            "2.7.1", "disk_no_cmk", Severity.LOW,
+            f"관리 디스크 CMK 미적용: {name or '(디스크미상)'}",
+            "관리 디스크가 플랫폼 관리 키(PMK)만 사용합니다. 규제 요건에 따라 고객 관리 키(CMK)가 필요할 수 있습니다.",
+            platform="azure", evidence=json.dumps(d, ensure_ascii=False), resource=name,
+            recommendation="규제·내부정책상 필요 시 디스크 암호화 세트(Disk Encryption Set)로 고객 관리 키(CMK)를 적용하세요.",
+        ))
+
+
 def _check_azure_object(d: dict, findings: list[Finding], seen: set) -> None:
     if _val(d, "sourceAddressPrefix", "sourceAddressPrefixes") is not None or (
         _val(d, "direction") is not None and _val(d, "access") is not None
     ):
         _check_nsg_rule_obj(d, findings)
+
+    if _val(d, "httpsOnly", "httpsonly") is not None:
+        _check_azure_webapp_obj(d, findings)
+
+    if isinstance(_val(d, "encryption"), dict) and _val(_val(d, "encryption"), "type") is not None \
+            and _val(d, "allowBlobPublicAccess") is None and _val(d, "supportsHttpsTrafficOnly") is None:
+        _check_azure_disk_obj(d, findings)
 
     if _looks_like(d, "storage") or _val(d, "supportsHttpsTrafficOnly", "enableHttpsTrafficOnly") is not None \
             or _val(d, "allowBlobPublicAccess") is not None:
@@ -561,10 +639,24 @@ def _check_azure_object(d: dict, findings: list[Finding], seen: set) -> None:
 def _check_object(d: dict, findings: list[Finding], seen: set, hint: str | None) -> None:
     """플랫폼 감지 후 해당 검사기로 라우팅. hint는 전체 입력 기반 추정 플랫폼."""
     plat = _detect_platform(d) or hint
+    # 이 dict 자체가 어느 플랫폼 리소스인지 명확한 키가 있으면 그쪽 검사를 보장한다
+    # (혼합 입력에서 전체 hint가 반대 플랫폼으로 잡혀도 누락되지 않도록).
+    has_aws = any(k in {kk.lower() for kk in d if isinstance(kk, str)} for k in (
+        "dbinstanceidentifier", "publiclyaccessible", "snapshotid",
+        "createvolumepermission", "ippermissions", "groupid",
+        "publicaccessblockconfiguration", "policydocument"))
+    has_azure = any(k in {kk.lower() for kk in d if isinstance(kk, str)} for k in (
+        "httpsonly", "allowblobpublicaccess", "supportshttpstrafficonly",
+        "sourceaddressprefix", "roledefinitionname", "publicnetworkaccess"))
+
     if plat == "aws":
         _check_aws_object(d, findings, seen)
+        if has_azure:
+            _check_azure_object(d, findings, seen)
     elif plat == "azure":
         _check_azure_object(d, findings, seen)
+        if has_aws:
+            _check_aws_object(d, findings, seen)
     else:
         # 판단 불가 → 양쪽 다 시도(각 검사기가 자기 키 없으면 그냥 통과)
         _check_azure_object(d, findings, seen)
@@ -602,6 +694,19 @@ def _check_raw_text(text: str, findings: list[Finding], existing_types: set, hin
         add("2.9.4", "cloudtrail_missing", Severity.HIGH,
             "CloudTrail 추적 미구성/부분 구성",
             "다중 리전 CloudTrail 추적이 구성되지 않아 감사 로그 사각지대가 있습니다.", platform="aws")
+    # VPC Flow Logs 미구성 (AWS)
+    if re.search(r"flow[- ]?logs?", low) and re.search(r"\[\s*\]|\"?flowlogstatus\"?\s*[:=]\s*\"?inactive|no flow log", low):
+        add("2.9.4", "vpc_flowlogs_missing", Severity.MEDIUM,
+            "VPC Flow Logs 미구성/비활성",
+            "VPC Flow Logs가 구성되지 않았거나 비활성(INACTIVE) 상태로, 네트워크 트래픽 감사 사각지대가 있습니다.",
+            platform="aws")
+    # AWS Config 레코더 비활성 (AWS)
+    if re.search(r"configurationrecorder|config.{0,10}recorder", low) and \
+            re.search(r'"?recording"?\s*[:=]\s*(false|0)|\[\s*\]|not recording', low):
+        add("2.10.2", "aws_config_recorder_off", Severity.MEDIUM,
+            "AWS Config 레코더 비활성",
+            "AWS Config 구성 레코더가 비활성 상태로, 리소스 구성 변경 이력이 기록되지 않습니다.",
+            platform="aws")
     # 백업 실패/LRS
     if re.search(r"lastbackupstatus.{0,10}failed|backup.{0,10}failed|백업.{0,5}실패", low):
         add("2.12.1", "backup_failed", Severity.HIGH,
