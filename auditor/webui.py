@@ -170,7 +170,7 @@ INDEX_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>🛡️ 클라우드 전용 보안검토 <span class="sub">(ISMS-P · AWS/Azure)</span> <span class="sub" style="font-size:12px;opacity:.7">v4 (해결가이드·따라하기 포함)</span></h1>
+  <h1>🛡️ 클라우드 전용 보안검토 <span class="sub">(ISMS-P · AWS/Azure)</span> <span class="sub" style="font-size:12px;opacity:.7">v1</span></h1>
   <div class="sub">AWS(<code>aws ...</code>)/Azure(<code>az ...</code>) CLI로 추출한 정책·구성 텍스트를 붙여넣거나 업로드하면, <b>인터넷·AI 없이</b> 이슈를 찾고 개선안을 제안합니다. 플랫폼은 자동으로 구별됩니다.</div>
 </header>
 <div class="tabs">
