@@ -12,17 +12,25 @@ import re
 import unittest
 
 
-def _source_files():
+# 위험 패턴을 '데이터(탐지 규칙·예시 문자열)'로만 담는 모듈은 스캔에서 제외한다.
+# appsec.py 는 간이 SAST 스캐너로, shell=True·eval(·os.system( 등을 '탐지 대상 문자열'로
+# 포함해야 하므로 실행 코드 스캔 대상에서 뺀다. 대신 이 모듈이 해당 함수를 '실제로 호출'하지
+# 않는지는 AppsecScannerIsDataOnlyTest 에서 별도로 검증한다.
+_PATTERN_SCAN_EXEMPT = {"appsec.py"}
+
+
+def _source_files(exempt=None):
+    exempt = exempt or set()
     root = os.path.join(os.path.dirname(__file__), "..")
     files = []
     for pkg in ("auditor", "autoauditor"):
         files += glob.glob(os.path.join(root, pkg, "*.py"))
-    return files
+    return [f for f in files if os.path.basename(f) not in exempt]
 
 
 class NoDangerousPatternsTest(unittest.TestCase):
     def test_no_shell_true(self):
-        for f in _source_files():
+        for f in _source_files(_PATTERN_SCAN_EXEMPT):
             src = open(f, encoding="utf-8").read()
             self.assertNotRegex(src, r"shell\s*=\s*True",
                                 f"{os.path.basename(f)} 에 shell=True 존재")
@@ -31,11 +39,58 @@ class NoDangerousPatternsTest(unittest.TestCase):
         # 실제 호출 형태만 탐지(주석/문자열 설명은 정규식 경계로 최소화)
         patterns = [r"\beval\s*\(", r"\bexec\s*\(", r"os\.system\s*\(",
                     r"\bimport\s+pickle\b", r"\b__import__\s*\("]
-        for f in _source_files():
+        for f in _source_files(_PATTERN_SCAN_EXEMPT):
             src = open(f, encoding="utf-8").read()
             for pat in patterns:
                 self.assertNotRegex(src, pat,
                                     f"{os.path.basename(f)} 에 위험 패턴 {pat}")
+
+
+class AppsecScannerIsDataOnlyTest(unittest.TestCase):
+    """appsec.py(간이 SAST)는 위험 패턴을 '탐지 규칙'으로만 갖고, 실제로 호출하지 않아야 한다.
+
+    검증 방식: 모듈을 AST로 파싱해 실행 가능한 호출부(Call/Import 노드)에
+    eval/exec/os.system/subprocess(shell=True)/pickle 이 없는지 본다.
+    (regex 문자열·예시 문자열은 AST에서 그냥 상수 문자열이라 잡히지 않는다.)
+    """
+
+    def _tree(self):
+        import ast
+        root = os.path.join(os.path.dirname(__file__), "..")
+        src = open(os.path.join(root, "auditor", "appsec.py"), encoding="utf-8").read()
+        return ast.parse(src)
+
+    def test_no_real_dangerous_calls(self):
+        import ast
+        tree = self._tree()
+        banned_calls = {"eval", "exec", "system", "popen"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                # eval(...) / exec(...)
+                if isinstance(fn, ast.Name):
+                    self.assertNotIn(fn.id, banned_calls,
+                                     f"appsec.py 가 {fn.id}() 를 실제 호출")
+                # os.system(...) / os.popen(...)
+                if isinstance(fn, ast.Attribute):
+                    self.assertNotIn(fn.attr, banned_calls,
+                                     f"appsec.py 가 .{fn.attr}() 를 실제 호출")
+                # subprocess(..., shell=True) 실제 호출 금지
+                for kw in node.keywords:
+                    if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                        self.fail("appsec.py 가 shell=True 로 실제 호출")
+
+    def test_no_dangerous_imports(self):
+        import ast
+        tree = self._tree()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for n in node.names:
+                    self.assertNotIn(n.name, {"pickle", "subprocess"},
+                                     f"appsec.py 가 {n.name} 를 import")
+            if isinstance(node, ast.ImportFrom):
+                self.assertNotIn(node.module, {"pickle", "subprocess"},
+                                 f"appsec.py 가 {node.module} 에서 import")
 
     def test_no_hardcoded_secrets(self):
         secret_pats = [

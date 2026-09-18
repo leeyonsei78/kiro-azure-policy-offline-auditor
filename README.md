@@ -27,7 +27,13 @@
 - 🔐 **개인정보·시크릿 노출 탐지**: 입력에서 주민번호·카드번호·이메일 등 개인정보와 하드코딩된 키·비밀번호·토큰을 탐지(근거는 마스킹 표시).
 - 📦 **컨테이너·API·WAF 점검**: EKS/AKS API 서버 퍼블릭 노출·RBAC, API Gateway 인증 누락, WAF 미구성까지 점검.
 - 🗺️ **MITRE ATT&CK 매핑**: 각 이슈를 공격 기법(예: T1190 Exploit Public-Facing Application)에 연결해 위협 관점으로 이해.
-- 📈 **추세 비교**: 이전 점검 대비 **신규 발생·해결·유지** 이슈와 점수 변화를 자동 비교(브라우저에 기준 보관, 폐쇄망 동작).
+- 📈 **추세 비교**: 이전 점검 대비 **신규 발생·유지** 이슈와 점수 변화를 자동 비교(브라우저에 기준 보관, 폐쇄망 동작).
+- 🚨 **사고 대응(IR) 가이드**: 침해 유형(계정 탈취·데이터 노출·권한 오남용·악성코드·랜섬웨어·DDoS)을 고르면 ISMS-P 2.11에 맞춘 **6단계 대응 플레이북 + 증거수집 명령어 + 사고 보고서 양식**을 생성(안내용).
+- 🧪 **앱 보안 점검(간이 SAST + WAF)**: 소스코드에서 위험 패턴을 정규식으로 탐지(참고용)하고, WAF(웹 방화벽) 구성이 활성/관리형 룰셋 적용 상태인지 점검. **언어 자동 감지**(Python·JavaScript·HTML·SQL)로 해당 언어 규칙만 적용해 오탐을 줄입니다.
+  - **공통**: 하드코딩 비밀번호·키, 하드코딩 IP, 취약 암호(MD5/SHA1/DES/RC4/ECB), TLS 검증 해제, SQL 인젝션
+  - **Python**: 명령 실행(shell=True)·eval/exec, 안전하지 않은 파일 권한(0777), 경로 조작(Path Traversal), XXE, 보안 검사에 assert 사용, 안전하지 않은 임시파일, 0.0.0.0 바인딩
+  - **HTML/JS**: XSS(innerHTML·document.write·jQuery .html), javascript: URL·문자열 setTimeout, target=_blank noopener 누락, 인라인 이벤트 핸들러
+  - **SQL**: 과도한 권한(GRANT ALL)·PUBLIC 부여, xp_cmdshell 등 위험 프로시저, 비밀번호 평문 저장
 - 💾 **엑셀(.xlsx)/CSV/PDF 저장**: 결과를 진짜 엑셀 파일로 저장(줄바꿈·특수문자 보존, CSV 손실 없음) 또는 CSV·PDF(인쇄)로 내보내기. 모두 표준 라이브러리만 사용해 폐쇄망에서 동작.
 
 ## 왜 오프라인인가
@@ -182,6 +188,23 @@ python -m auditor --commands --platform azure
 python -m auditor --script --platform azure --out collect-azure.sh
 python -m auditor --script --platform azure --shell ps1 --out collect-azure.ps1
 python -m auditor --script --platform aws --out collect-aws.sh
+
+# 사고 대응(IR) 플레이북 — 유형 목록 보기
+python -m auditor --ir
+# 특정 침해 유형의 대응 플레이북(AWS 기준)
+python -m auditor --ir account_compromise --platform aws
+python -m auditor --ir ransomware --platform azure --json
+
+# 앱 보안 점검 — 간이 SAST(소스코드 위험 패턴, 언어 자동 감지)
+python -m auditor app.py --sast
+cat app.py | python -m auditor --sast
+# 언어를 직접 지정(auto/python/js/html/sql/all)
+python -m auditor schema.sql --sast --lang sql
+python -m auditor index.html --sast --lang html
+# WAF 구성 점검(입력에서 WAF 활성·룰셋 여부 확인)
+python -m auditor waf-policy.json --waf --platform azure
+# SAST + WAF 동시
+python -m auditor input.txt --sast --waf
 ```
 
 > `--out`(또는 `-o`) 없이 `--csv`/`--html` 만 쓰면 화면에 출력됩니다.
