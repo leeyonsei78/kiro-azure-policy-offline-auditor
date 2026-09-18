@@ -7,6 +7,8 @@
 ## 특징
 
 - 🔒 **완전 오프라인**: Python 표준 라이브러리만 사용. 외부 패키지·인터넷·AI API·CDN이 전혀 필요 없습니다.
+- 🤖 **수동 + 자동 2-track**: 사람이 보며 점검하는 웹 UI/CLI(수동)와, 클라우드에서 주기 실행되는 자동 점검 에이전트(`autoauditor`)를 함께 제공합니다.
+- 🚨 **침해 탐지·대응**: GuardDuty/Defender 경고·로그 상관분석으로 무차별 대입·루트 사용·악성 IP를 탐지하고, **Slack 알림 + 차단/대응 명령(반자동, 안전장치 포함)**을 제공합니다.
 - ☁️ **AWS + Azure 지원**: 입력을 자동 감지해 플랫폼별(AWS/Azure) 판단기준·개선안·재점검 CLI를 적용하고, 결과에 플랫폼 뱃지·필터를 제공합니다.
 - 📋 **ISMS-P 기준**: 클라우드 인프라 직결 7개 영역·**17개 통제항목**의 판단기준/개선방안을 플랫폼별로 내장.
 - 🗄️ **Azure SQL 심층 점검(8항목)**: TDE·CMK·Public Access·Private Endpoint·Auditing·Defender for SQL·취약성 평가(VA)·장기보존(LTR)을 명령어와 함께 점검.
@@ -285,6 +287,66 @@ aws cloudtrail describe-trails --output json                          >> aws.txt
 
 이 설명들은 화면뿐 아니라 **텍스트·CSV·엑셀·PDF(HTML) 리포트**에도 모두 포함됩니다.
 
+## 🤖 자동 점검 에이전트 (autoauditor)
+
+수동 도구(웹 UI/CLI)와 별개로, **클라우드에서 주기적으로 자동 점검**하는 에이전트를 함께 제공합니다.
+수동 도구의 분석 엔진을 그대로 재사용하며, 한 번 실행하면 다음을 자동 수행합니다:
+
+1. **수집** — `aws`/`az` CLI로 리소스 구성을 자동 수집(자리표시자가 필요한 명령은 건너뜀)
+2. **분석** — 취약 구성·위험 점수·복합 위험(공격 경로) 판정
+3. **침해 탐지** — GuardDuty/Defender 경고, 로그인 실패 급증(무차별 대입), 루트 사용, 악성 지표 상관분석
+4. **대응 계획** — 취약 구성·악성 IP에 대한 차단/조치 명령 생성(기본 반자동)
+5. **알림** — 심각/복합위험/침해 시 **Slack**으로 요약 전송
+6. **리포트 저장** — 텍스트·HTML·엑셀·JSON을 타임스탬프로 자동 보관
+
+### 실행
+
+```bash
+# 1회 실행(환경변수 설정 사용). 데모는 --mock
+python -m autoauditor --platform aws
+python -m autoauditor --platform azure --mock
+
+# 이미 수집한 구성/로그 파일로 분석만
+python -m autoauditor --config-file config.json --threat-file logs.txt
+```
+
+주요 환경변수(비밀값은 코드에 넣지 말고 여기서 주입):
+
+| 환경변수 | 설명 | 기본 |
+|----------|------|------|
+| `AUTOAUDITOR_PLATFORM` | aws \| azure | aws |
+| `AUTOAUDITOR_SLACK_WEBHOOK` | Slack Incoming Webhook URL(없으면 알림 생략) | (없음) |
+| `AUTOAUDITOR_ALERT_MIN_SEVERITY` | 알림 최소 심각도 | HIGH |
+| `AUTOAUDITOR_OUTPUT_DIR` | 리포트 저장 폴더 | ./autoaudit_out |
+| `AUTOAUDITOR_REMEDIATION` | off \| suggest(반자동) \| auto | suggest |
+| `AUTOAUDITOR_DRY_RUN` | true면 실제 변경 안 함 | true |
+| `AUTOAUDITOR_PROTECT_TAGS` | 차단 금지(화이트리스트) 키워드, 쉼표구분 | (없음) |
+
+### 스케줄 등록
+
+```bash
+# Linux/mac - cron 매시간 예시
+0 * * * * cd /opt/kiro-azure-policy-offline-auditor && \
+  AUTOAUDITOR_PLATFORM=aws AUTOAUDITOR_SLACK_WEBHOOK="..." \
+  ./autoauditor/run_scheduled.sh >> /var/log/autoaudit/cron.log 2>&1
+```
+
+- **Windows**: `autoauditor\run_scheduled.bat` 을 작업 스케줄러(schtasks)에 등록
+- **AWS Lambda**: `autoauditor/lambda_function.py`의 `handler`를 EventBridge(rate(1 hour))로 트리거
+  (표준 라이브러리만 사용 → 의존성 패키징 불필요, 출력은 `/tmp`, Slack으로 요약 전송)
+
+### 🛡️ 자동 차단의 안전장치 (중요)
+
+자동 차단은 잘못되면 정상 서비스를 막을 수 있어, 기본을 **반자동**으로 두고 여러 안전장치를 둡니다:
+
+- **suggest(기본)**: 차단/조치 명령을 **생성만** 하고 실행하지 않음 → 사람이 검토 후 실행
+- **dry_run(기본 true)**: `auto` 모드라도 dry_run이면 **실제 변경 없이** "실행했을 명령"만 기록
+- **화이트리스트(`PROTECT_TAGS`)**: 보호 키워드가 포함된 대상은 **절대 건드리지 않음**(skipped_protected)
+- **롤백 명령 동봉**: 각 조치에 되돌리기 명령을 함께 생성
+- **파괴적 작업 금지**: 삭제·종료 계열은 자동 실행하지 않고 '제한/비활성/차단'만 수행
+
+> 완전 자동 차단(`auto` + `--no-dry-run`)은 화이트리스트·롤백을 반드시 갖춘 뒤, 소규모부터 신중히 적용하세요.
+
 ## 프로젝트 구조
 
 ```
@@ -301,6 +363,18 @@ azure-policy-offline-auditor/
     report.py            # 텍스트 리포트 포매터
     webui.py             # 로컬 웹 UI(http.server, 단일 HTML)
     cli.py               # 명령줄 인터페이스
+  autoauditor/           # 🤖 자동 점검 에이전트(스케줄 실행)
+    __init__.py
+    __main__.py          # python -m autoauditor 진입점(1회 실행)
+    config.py            # 설정(환경변수, 안전장치 옵션)
+    collector.py         # aws/az CLI 자동 수집(+목업 폴백)
+    threat.py            # 침해 탐지·상관분석(GuardDuty/Defender/로그)
+    notifier.py          # Slack 알림(표준 라이브러리 urllib)
+    remediation.py       # 차단/대응 명령 생성(반자동+안전장치)
+    orchestrator.py      # run_once: 수집→분석→침해→알림→리포트→대응
+    lambda_function.py   # AWS Lambda 핸들러(EventBridge 스케줄)
+    run_scheduled.sh     # Linux/mac cron 실행 스크립트
+    run_scheduled.bat    # Windows 작업 스케줄러 실행 스크립트
   samples/               # 예시 입력 파일
   tests/                 # 단위 테스트 (python -m unittest)
   README.md
