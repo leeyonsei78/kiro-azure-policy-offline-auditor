@@ -25,6 +25,7 @@ from .collector_script import build_script, script_filename
 from .knowledge_base import all_controls, collection_commands
 from .parser import decode_bytes
 from .report import format_csv, format_html, format_xlsx
+from . import ir_playbook, appsec
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,8 @@ INDEX_HTML = """<!DOCTYPE html>
   <div class="tab active" id="tab-audit" onclick="switchTab('audit')">🔎 보안검토</div>
   <div class="tab" id="tab-commands" onclick="switchTab('commands')">📋 수집 명령어 가이드</div>
   <div class="tab" id="tab-auto" onclick="switchTab('auto')">⚙️ 자동화 배포 가이드</div>
+  <div class="tab" id="tab-ir" onclick="switchTab('ir')">🚨 사고 대응 가이드</div>
+  <div class="tab" id="tab-appsec" onclick="switchTab('appsec')">🧪 앱 보안 점검</div>
 </div>
 <main>
  <div id="pane-audit">
@@ -415,6 +418,58 @@ deploy.bat "https://hooks.slack.com/services/XXX/YYY/ZZZ"</pre><button class="co
    </div><!-- /auto-azure -->
   </div>
  </div><!-- /pane-auto -->
+
+ <div id="pane-ir" style="display:none">
+  <div class="card">
+    <div class="banner">🚨 <b>사고 대응(IR) 가이드</b> — 침해 유형을 고르면 ISMS-P 2.11(사고 예방·대응) 절차에 맞춘
+      <b>단계별 대응 플레이북 · 증거수집 명령어 · 보고서 양식</b>을 만들어 드립니다.
+      <br>※ 실제 격리·복구·신고는 담당자가 승인 절차에 따라 직접 수행해야 합니다. 이 화면은 절차 안내용입니다.</div>
+    <div class="row" style="margin-top:12px">
+      <span class="hint">침해 유형:</span>
+      <select id="ir-type" class="search" style="max-width:320px"></select>
+      <span class="hint" style="margin-left:8px">대상:</span>
+      <div class="toggle" id="ir-plat">
+        <button data-p="aws" class="on" onclick="setIrPlat('aws')">AWS</button>
+        <button data-p="azure" onclick="setIrPlat('azure')">Azure</button>
+      </div>
+      <button class="btn primary" onclick="runIr()">플레이북 생성</button>
+    </div>
+    <div class="err" id="ir-err"></div>
+  </div>
+  <div id="ir-result"></div>
+ </div><!-- /pane-ir -->
+
+ <div id="pane-appsec" style="display:none">
+  <div class="card">
+    <div class="banner">🧪 <b>애플리케이션 보안 점검</b> — 소스코드에서 위험 패턴(간이 SAST)을 찾고,
+      WAF(웹 방화벽) 구성이 켜져 있는지 점검합니다.
+      <br>※ 정규식 기반 <b>참고용</b>이며 상용 정적분석/실제 공격시험(DAST)을 대체하지 않습니다. 결과는 코드 맥락으로 확인하세요.</div>
+    <div class="row" style="margin-top:12px">
+      <span class="hint">점검 종류:</span>
+      <div class="toggle" id="as-mode">
+        <button data-m="sast" class="on" onclick="setAsMode('sast')">소스코드(SAST)</button>
+        <button data-m="waf" onclick="setAsMode('waf')">WAF 구성</button>
+        <button data-m="both" onclick="setAsMode('both')">둘 다</button>
+      </div>
+      <span class="hint" style="margin-left:8px" id="as-plat-wrap">플랫폼:</span>
+      <div class="toggle" id="as-plat">
+        <button data-p="aws" class="on" onclick="setAsPlat('aws')">AWS</button>
+        <button data-p="azure" onclick="setAsPlat('azure')">Azure</button>
+      </div>
+    </div>
+    <label id="as-label" style="margin-top:10px">점검할 소스코드 붙여넣기</label>
+    <textarea id="as-input" placeholder="예) app.py 등 소스코드를 붙여넣으세요. WAF 구성 점검은 'WAF 구성' 선택 후 WAF 정책 JSON을 붙여넣습니다."></textarea>
+    <div class="row">
+      <input type="file" id="as-file" accept=".py,.js,.ts,.java,.go,.php,.rb,.txt,.json,.tf,.yaml,.yml" onchange="loadAsFile()">
+      <button class="btn primary" onclick="runAppsec()">점검 실행</button>
+      <button class="btn" onclick="clearAppsec()">지우기</button>
+      <span class="hint">파일도 로컬에서만 읽어 입력칸에 채웁니다(외부 전송·저장 없음).</span>
+    </div>
+    <div class="hint" id="as-load-info" style="margin-top:6px"></div>
+    <div class="err" id="as-err"></div>
+  </div>
+  <div id="as-result"></div>
+ </div><!-- /pane-appsec -->
 </main>
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -422,14 +477,14 @@ function nl2br(s){ return String(s==null?'':s).replace(/\\n/g,'<br>'); }
 
 // ----- 탭 -----
 function switchTab(t){
-  document.getElementById('pane-audit').style.display = (t==='audit')?'block':'none';
-  document.getElementById('pane-commands').style.display = (t==='commands')?'block':'none';
-  document.getElementById('pane-auto').style.display = (t==='auto')?'block':'none';
-  document.getElementById('tab-audit').classList.toggle('active', t==='audit');
-  document.getElementById('tab-commands').classList.toggle('active', t==='commands');
-  document.getElementById('tab-auto').classList.toggle('active', t==='auto');
+  var panes=['audit','commands','auto','ir','appsec'];
+  panes.forEach(function(p){
+    var pane=document.getElementById('pane-'+p); if(pane) pane.style.display=(t===p)?'block':'none';
+    var tab=document.getElementById('tab-'+p); if(tab) tab.classList.toggle('active', t===p);
+  });
   if(t==='commands' && !CMD_DATA){ loadCommands(); }
   if(t==='auto'){ setAutoCloud('aws'); }
+  if(t==='ir' && !IR_TYPES){ loadIrTypes(); }
 }
 // 자동화 배포 가이드: AWS/Azure 절차 전환
 function setAutoCloud(c){
@@ -945,6 +1000,154 @@ async function openPdf(){
     try{ w.document.title=_tsName('pdf').replace(/\.pdf$/,''); }catch(e){}
   }catch(e){ document.getElementById('err').textContent='PDF(인쇄) 준비 실패: '+e; }
 }
+
+// ===== 사고 대응(IR) 가이드 =====
+var IR_TYPES=null; var IR_PLAT='aws';
+async function loadIrTypes(){
+  try{
+    var resp=await fetch('/api/ir_types');
+    var d=await resp.json();
+    IR_TYPES=(d&&d.types)||[];
+    var sel=document.getElementById('ir-type');
+    sel.innerHTML=IR_TYPES.map(function(t){
+      return '<option value="'+esc(t.type)+'">'+esc(t.name)+' ('+esc(t.severity)+')</option>';
+    }).join('');
+  }catch(e){ document.getElementById('ir-err').textContent='유형 목록 로드 실패: '+e; }
+}
+function setIrPlat(p){
+  IR_PLAT=p;
+  Array.prototype.forEach.call(document.querySelectorAll('#ir-plat button'), function(b){
+    b.classList.toggle('on', b.getAttribute('data-p')===p);
+  });
+}
+async function runIr(){
+  var errEl=document.getElementById('ir-err'); errEl.textContent='';
+  var itype=document.getElementById('ir-type').value;
+  if(!itype){ errEl.textContent='침해 유형을 선택하세요.'; return; }
+  try{
+    var resp=await fetch('/api/ir',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type:itype, platform:IR_PLAT})});
+    var d=await resp.json();
+    if(!d.ok){ errEl.textContent='생성 실패: '+(d.error||'알 수 없는 오류'); return; }
+    renderIr(d.playbook);
+  }catch(e){ errEl.textContent='생성 실패: '+e; }
+}
+function renderIr(pb){
+  var host=document.getElementById('ir-result'); if(!host) return;
+  var sev=pb.severity||'INFO';
+  var html='<div class="card">';
+  html+='<div class="ftop"><span class="sev '+esc(sev)+'">'+esc(sev)+'</span>'+
+        '<span class="ftitle" style="font-size:16px">'+esc(pb.name)+'</span>'+
+        '<span class="code">'+esc(pb.platform.toUpperCase())+'</span></div>';
+  html+='<div class="meta" style="margin-top:6px">'+esc(pb.summary)+'</div>';
+  html+='<div class="hint" style="margin-top:4px"><b>ISMS-P:</b> '+esc(pb.isms_p)+' &nbsp;|&nbsp; <b>MITRE:</b> '+esc(pb.mitre)+'</div>';
+  // 단계
+  (pb.steps||[]).forEach(function(st){
+    html+='<div class="sec" style="margin-top:10px">'+esc(st.phase)+'</div>';
+    (st.actions||[]).forEach(function(a){ html+='<div class="tritem tri-new">• '+esc(a)+'</div>'; });
+  });
+  // 증거 수집 명령어
+  if(pb.evidence_commands && pb.evidence_commands.length){
+    html+='<div class="sec" style="margin-top:10px">🔎 증거 수집 명령어 <span class="hint">(담당자 검토 후 실행, 값은 실제로 치환)</span></div>';
+    pb.evidence_commands.forEach(function(c,i){
+      var id='ircmd'+i;
+      html+='<div class="cmdcard"><code id="'+id+'">'+esc(c)+'</code>'+
+            ' <button class="copybtn" onclick="copyCmd(\\''+id+'\\',this)">복사</button></div>';
+    });
+  }
+  // 보고서 양식
+  if(pb.report_template && pb.report_template.length){
+    html+='<div class="sec" style="margin-top:10px">📝 사고 보고서 양식</div>';
+    html+='<div class="finding">'+pb.report_template.map(function(r){return esc(r);}).join('<br>')+'</div>';
+  }
+  html+='<div class="crit-hint" style="margin-top:10px">'+esc(pb.disclaimer)+'</div>';
+  html+='</div>';
+  host.innerHTML=html;
+}
+
+// ===== 앱 보안 점검(SAST/WAF) =====
+var AS_MODE='sast'; var AS_PLAT='aws';
+function setAsMode(m){
+  AS_MODE=m;
+  Array.prototype.forEach.call(document.querySelectorAll('#as-mode button'), function(b){
+    b.classList.toggle('on', b.getAttribute('data-m')===m);
+  });
+  var lbl=document.getElementById('as-label');
+  var pw=document.getElementById('as-plat-wrap'); var pt=document.getElementById('as-plat');
+  if(m==='sast'){ lbl.textContent='점검할 소스코드 붙여넣기'; }
+  else if(m==='waf'){ lbl.textContent='WAF 정책·구성(JSON) 붙여넣기'; }
+  else { lbl.textContent='소스코드 또는 구성 붙여넣기'; }
+  // WAF 점검일 때만 플랫폼 선택이 의미 있음(표기)
+  var show=(m!=='sast');
+  pw.style.opacity=show?'1':'0.4'; pt.style.opacity=show?'1':'0.4';
+}
+function setAsPlat(p){
+  AS_PLAT=p;
+  Array.prototype.forEach.call(document.querySelectorAll('#as-plat button'), function(b){
+    b.classList.toggle('on', b.getAttribute('data-p')===p);
+  });
+}
+function loadAsFile(){
+  var f=document.getElementById('as-file').files[0];
+  var meta=document.getElementById('as-load-info');
+  var errEl=document.getElementById('as-err');
+  if(!f){ return; }
+  errEl.textContent='';
+  var r=new FileReader();
+  r.onload=function(e){
+    document.getElementById('as-input').value=e.target.result;
+    if(meta) meta.textContent='불러옴: '+f.name+' ('+f.size+' bytes)';
+  };
+  r.onerror=function(){ errEl.textContent='파일 읽기에 실패했습니다.'; };
+  r.readAsText(f);
+}
+function clearAppsec(){
+  document.getElementById('as-input').value='';
+  document.getElementById('as-result').innerHTML='';
+  document.getElementById('as-err').textContent='';
+  var m=document.getElementById('as-load-info'); if(m) m.textContent='';
+}
+async function runAppsec(){
+  var errEl=document.getElementById('as-err'); errEl.textContent='';
+  var text=document.getElementById('as-input').value;
+  if(!text.trim()){ errEl.textContent='점검할 소스코드 또는 구성을 입력하세요.'; return; }
+  try{
+    var resp=await fetch('/api/appsec',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:text, mode:AS_MODE, platform:AS_PLAT})});
+    var d=await resp.json();
+    if(!d.ok){ errEl.textContent='점검 실패: '+(d.error||'알 수 없는 오류'); return; }
+    renderAppsec(d);
+  }catch(e){ errEl.textContent='점검 실패: '+e; }
+}
+function renderAppsec(d){
+  var host=document.getElementById('as-result'); if(!host) return;
+  var html='<div class="card">';
+  var order=['CRITICAL','HIGH','MEDIUM','LOW','INFO'];
+  var cnt=d.severity_counts||{};
+  var chips=order.filter(function(s){return cnt[s];}).map(function(s){
+    return '<span class="sev '+s+'">'+s+' '+cnt[s]+'</span>';
+  }).join(' ');
+  html+='<div class="ftop"><span class="ftitle" style="font-size:16px">점검 결과: 이슈 '+d.total+'건</span> '+chips+'</div>';
+  if(!d.findings.length){
+    html+='<div class="finding empty" style="margin-top:8px">탐지된 이슈가 없습니다. (규칙 기반 참고 결과)</div>';
+  } else {
+    d.findings.forEach(function(f){
+      html+='<div class="finding">';
+      html+='<div class="ftop"><span class="sev '+esc(f.severity)+'">'+esc(f.severity)+'</span>'+
+            '<span class="code">'+esc(f.control_code)+'</span>'+
+            '<span class="ftitle">'+esc(f.title)+'</span></div>';
+      if(f.description) html+='<div class="meta" style="margin-top:6px">'+esc(f.description)+'</div>';
+      if(f.evidence) html+='<div class="exbad" style="margin-top:6px">근거: '+esc(f.evidence)+'</div>';
+      if(f.recommendation) html+='<div class="fix" style="margin-top:6px"><b>✅ 개선:</b> '+esc(f.recommendation)+'</div>';
+      if(f.bad_example) html+='<div class="exbad" style="margin-top:6px">✗ '+esc(f.bad_example)+'</div>';
+      if(f.good_example) html+='<div class="exgood" style="margin-top:4px">✓ '+esc(f.good_example)+'</div>';
+      html+='</div>';
+    });
+  }
+  (d.notes||[]).forEach(function(n){ html+='<div class="crit-hint" style="margin-top:8px">'+esc(n)+'</div>'; });
+  html+='</div>';
+  host.innerHTML=html;
+}
 </script>
 </body>
 </html>
@@ -986,6 +1189,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
         elif self.path == "/api/controls":
             self._send_json({"controls": all_controls()})
+        elif self.path == "/api/ir_types":
+            self._send_json({"types": ir_playbook.list_incident_types()})
         elif self.path.startswith("/api/commands"):
             from urllib.parse import parse_qs, urlparse
             qs = parse_qs(urlparse(self.path).query)
@@ -1080,8 +1285,48 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_export()
         elif self.path == "/api/decode":
             self._handle_decode()
+        elif self.path == "/api/ir":
+            self._handle_ir()
+        elif self.path == "/api/appsec":
+            self._handle_appsec()
         else:
             self._send_json({"ok": False, "error": "not found"}, status=404)
+
+    def _handle_ir(self):
+        """사고 대응(IR) 플레이북 생성. {type, platform} 입력."""
+        try:
+            payload, err = self._read_payload()
+            if err:
+                self._send_json({"ok": False, "error": err}, status=413)
+                return
+            itype = (payload.get("type") or "").strip()
+            platform = (payload.get("platform") or "aws").lower()
+            try:
+                pb = ir_playbook.build_playbook(itype, platform)
+            except KeyError:
+                self._send_json({"ok": False, "error": f"알 수 없는 침해 유형: {itype}"}, status=400)
+                return
+            self._send_json({"ok": True, "playbook": pb})
+        except Exception as e:  # noqa: BLE001
+            logger.exception("ir 실패")
+            self._send_json({"ok": False, "error": str(e)}, status=500)
+
+    def _handle_appsec(self):
+        """앱 보안 점검(간이 SAST / WAF). {text, mode, platform} 입력."""
+        try:
+            payload, err = self._read_payload()
+            if err:
+                self._send_json({"ok": False, "error": err}, status=413)
+                return
+            text = payload.get("text", "")
+            mode = (payload.get("mode") or "sast").lower()
+            platform = (payload.get("platform") or "aws").lower()
+            result = appsec.run(text, filename=payload.get("filename", ""),
+                                platform=platform, mode=mode)
+            self._send_json(result)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("appsec 실패")
+            self._send_json({"ok": False, "error": str(e)}, status=500)
 
     def _handle_decode(self):
         """파일 바이트를 받아 인코딩을 판별·디코딩해 텍스트로 돌려준다.
