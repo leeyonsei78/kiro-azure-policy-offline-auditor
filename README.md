@@ -352,6 +352,43 @@ aws lambda invoke --function-name cloud-sec-auto-auditor out.json
 - **화면(웹 UI)의 "🤖 자동화 배포 가이드" 탭**에 동일 절차가 복사 버튼과 함께 단계별로 안내됩니다.
 - 삭제: `sam delete --stack-name cloud-sec-auto-auditor`
 
+### ☁️ Azure Functions 자동 배포 (Timer)
+
+**한 줄 배포**로 Azure Functions(Timer) + 리소스 그룹·스토리지·관리 ID·역할·앱 설정을 자동 구성합니다.
+Functions 런타임에는 `az` CLI가 없지만 **Azure SDK**로 실제 구독 데이터를 수집합니다(관리 ID 인증).
+
+```bash
+cd deploy-azure
+# Windows:  deploy.bat "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+./deploy.sh "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+```
+
+- 사전 준비: **Azure CLI**(`az login`) + **Azure Functions Core Tools(`func`)**
+- 스케줄은 `deploy-azure/AutoAudit/function.json`의 CRON, 옵션은 Function App 앱 설정으로 조정 (상세: **`deploy-azure/README.md`**)
+- 화면 "🤖 자동화 배포 가이드" 탭에서 **🟦 Azure**를 선택하면 동일 절차가 단계별로 안내됩니다.
+- 삭제: `az group delete -n rg-cloudsec-autoaudit --yes`
+
+### 🧰 배포 도구 로컬 설치 (처음 한 번)
+
+**AWS로 배포하려면**
+1. **AWS CLI** 설치 — AWS 공식 "Install AWS CLI"(Windows MSI). 확인: `aws --version`
+2. **AWS SAM CLI** 설치 — AWS 공식 "Install SAM CLI"(Windows MSI). 확인: `sam --version`
+3. **자격증명 등록**: 명령프롬프트에서 `aws configure`
+   ```
+   AWS Access Key ID:      (IAM 사용자 액세스 키)
+   AWS Secret Access Key:  (비밀 키)
+   Default region name:    ap-northeast-2      # 서울
+   Default output format:  json
+   ```
+   > 액세스 키는 AWS 콘솔 → IAM → 사용자 → 보안 자격 증명 → 액세스 키에서 발급. **배포 권한**(CloudFormation/Lambda/IAM/S3/Events)이 있는 계정이어야 합니다.
+
+**Azure로 배포하려면**
+1. **Azure CLI** 설치 — Microsoft "Install Azure CLI". 확인: `az version`
+2. **로그인**: `az login` → 브라우저 인증. 여러 구독이면 `az account set --subscription <구독ID>`
+3. **Azure Functions Core Tools(func)** 설치 — Microsoft "Run functions locally". 확인: `func --version`
+
+> 참고: 위 CLI는 **배포할 때만** 필요합니다. 배포된 Lambda/Functions는 이후 스스로 스케줄대로 실행됩니다.
+
 ### 🛡️ 자동 차단의 안전장치 (중요)
 
 자동 차단은 잘못되면 정상 서비스를 막을 수 있어, 기본을 **반자동**으로 두고 여러 안전장치를 둡니다:
@@ -386,17 +423,25 @@ azure-policy-offline-auditor/
     config.py            # 설정(환경변수, 안전장치 옵션)
     collector.py         # aws/az CLI 자동 수집(+목업 폴백)
     collector_boto3.py   # boto3(AWS SDK) 수집 — Lambda 등 CLI 없는 환경용
+    collector_azure_sdk.py # Azure SDK 수집 — Functions 등 CLI 없는 환경용
     threat.py            # 침해 탐지·상관분석(GuardDuty/Defender/로그)
     notifier.py          # Slack 알림(표준 라이브러리 urllib)
     remediation.py       # 차단/대응 명령 생성(반자동+안전장치)
     orchestrator.py      # run_once: 수집→분석→침해→알림→리포트→대응
     lambda_function.py   # AWS Lambda 핸들러(EventBridge 스케줄)
+    azure_function.py    # Azure Functions 핸들러(Timer 트리거)
     run_scheduled.sh     # Linux/mac cron 실행 스크립트
     run_scheduled.bat    # Windows 작업 스케줄러 실행 스크립트
   deploy/                # AWS Lambda 배포(SAM)
     template.yaml        # SAM 템플릿(Lambda + EventBridge 스케줄 + 읽기 IAM)
     samconfig.toml       # 배포 기본값
     deploy.sh / deploy.bat  # 한 줄 배포 스크립트
+    README.md            # 배포 가이드(단계별)
+  deploy-azure/          # Azure Functions 배포
+    host.json / requirements.txt
+    AutoAudit/function.json   # Timer 트리거(스케줄)
+    AutoAudit/__init__.py     # Functions 진입점
+    deploy.sh / deploy.bat    # 한 줄 배포 스크립트
     README.md            # 배포 가이드(단계별)
   samples/               # 예시 입력 파일
   tests/                 # 단위 테스트 (python -m unittest)

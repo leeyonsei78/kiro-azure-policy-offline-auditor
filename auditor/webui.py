@@ -255,9 +255,16 @@ INDEX_HTML = """<!DOCTYPE html>
 
  <div id="pane-auto" style="display:none">
   <div class="card">
-    <div class="banner">🤖 <b>자동화 배포 가이드</b> — 이 프로그램을 <b>AWS Lambda</b>에 올려두면, 정해진 주기마다
+    <div class="banner">🤖 <b>자동화 배포 가이드</b> — 이 프로그램을 클라우드에 올려두면, 정해진 주기마다
       <b>자동으로 점검·침해탐지</b>하고 심각한 것은 <b>Slack</b>으로 알려줍니다. 아래 순서대로 따라 하세요.</div>
 
+    <div class="row" style="margin:8px 0">
+      <span class="hint" style="margin-right:6px">배포 대상:</span>
+      <button class="btn" id="ac-aws" onclick="setAutoCloud('aws')">🟧 AWS (Lambda)</button>
+      <button class="btn" id="ac-azure" onclick="setAutoCloud('azure')">🟦 Azure (Functions)</button>
+    </div>
+
+   <div id="auto-aws">
     <div class="autostep">
       <div class="autonum">1</div>
       <div class="autobody">
@@ -330,6 +337,85 @@ deploy.bat "https://hooks.slack.com/services/XXX/YYY/ZZZ" "rate(1 hour)"</pre><b
     <div class="crit-hint">⚠️ <b>자동 차단(auto)</b>은 잘못되면 정상 서비스를 막을 수 있어 기본이 <b>반자동(suggest)</b>입니다.
       실제 자동 차단을 켜려면 <code>Remediation=auto</code> + <code>DryRun=false</code> + <code>ProtectTags</code>(보호 리소스)를 반드시 함께 설정하고, 소규모부터 신중히 적용하세요.</div>
     <div class="hint" style="margin-top:10px">자세한 내용: 프로젝트의 <code>deploy/README.md</code>. Slack이 안 오면 (1) Webhook URL, (2) 이번 주기에 HIGH↑ 이슈/침해 존재 여부, (3) <code>aws lambda invoke</code>로 즉시 테스트해 로그 확인.</div>
+   </div><!-- /auto-aws -->
+
+   <div id="auto-azure" style="display:none">
+    <div class="autostep">
+      <div class="autonum">1</div>
+      <div class="autobody">
+        <b>사전 준비</b>
+        <ul>
+          <li><b>Azure CLI</b> 설치 후 로그인: <code>az login</code> (필요 시 <code>az account set --subscription &lt;구독ID&gt;</code>)</li>
+          <li><b>Azure Functions Core Tools(func)</b> 설치</li>
+          <li>기존 <b>Slack Incoming Webhook URL</b> 준비 (지금 쓰시는 워크스페이스·채널 것 그대로)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="autostep">
+      <div class="autonum">2</div>
+      <div class="autobody">
+        <b>배포 (한 줄)</b> — 프로젝트의 <code>deploy-azure</code> 폴더에서 실행합니다. Webhook URL만 본인 것으로 바꾸세요.
+        <div class="cmdline"><pre id="zcmd1">cd deploy-azure
+deploy.bat "https://hooks.slack.com/services/XXX/YYY/ZZZ"</pre><button class="copybtn" onclick="copyCmd('zcmd1',this)">복사</button></div>
+        <div class="hint">Linux/mac는 <code>./deploy.sh "웹훅URL"</code> · 리소스 그룹·스토리지·Function App·관리 ID·역할·앱설정·코드게시가 자동으로 만들어집니다.</div>
+      </div>
+    </div>
+
+    <div class="autostep">
+      <div class="autonum">3</div>
+      <div class="autobody">
+        <b>바로 한 번 실행해 Slack 확인</b>
+        <ul>
+          <li>Azure Portal → 만들어진 <b>Function App</b> → 함수 <b>AutoAudit</b> → <b>코드+테스트 → 테스트/실행</b></li>
+          <li>또는 스케줄(기본 <b>매시간</b>)을 기다립니다.</li>
+        </ul>
+        <div class="hint">심각(HIGH↑)하거나 침해가 탐지되면 Slack 채널로 요약이 도착합니다.</div>
+      </div>
+    </div>
+
+    <div class="autostep">
+      <div class="autonum">4</div>
+      <div class="autobody">
+        <b>동작 방식 (무엇이 자동으로 되나요)</b>
+        <ul>
+          <li>매 주기마다 <b>Azure SDK</b>로 실제 구독의 NSG·Storage·SQL·Defender 경고를 수집 (Function App의 <b>관리 ID</b>로 인증)</li>
+          <li>이 프로그램의 <b>같은 분석 엔진</b>으로 위험 점수·복합 위험 + 침해 탐지</li>
+          <li>심각/침해 시 <b>Slack 알림</b>, 차단/대응은 기본 <b>반자동</b>(명령만 생성) — 안전</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="autostep">
+      <div class="autonum">5</div>
+      <div class="autobody">
+        <b>옵션 조정</b> — Portal → Function App → <b>구성(Configuration)</b>의 앱 설정으로 변경
+        <table class="opttbl">
+          <tr><th>앱 설정</th><th>설명</th><th>기본</th></tr>
+          <tr><td>AUTOAUDITOR_ALERT_MIN_SEVERITY</td><td>알림 최소 심각도</td><td>HIGH</td></tr>
+          <tr><td>AUTOAUDITOR_REMEDIATION</td><td>off / suggest(반자동) / auto</td><td>suggest</td></tr>
+          <tr><td>AUTOAUDITOR_DRY_RUN</td><td>true면 auto라도 실제 변경 안 함</td><td>true</td></tr>
+          <tr><td>AUTOAUDITOR_PROTECT_TAGS</td><td>차단 금지(화이트리스트) 키워드</td><td>(없음)</td></tr>
+        </table>
+        <div class="hint">스케줄은 <code>deploy-azure/AutoAudit/function.json</code>의 CRON으로 조정 (예: <code>0 0 */6 * * *</code> = 6시간마다)</div>
+      </div>
+    </div>
+
+    <div class="autostep">
+      <div class="autonum">6</div>
+      <div class="autobody">
+        <b>로그 확인 · 삭제</b>
+        <ul>
+          <li>로그: Portal → Function App → <b>로그 스트림</b>(또는 Application Insights)</li>
+        </ul>
+        <div class="cmdline"><pre id="zcmd2">az group delete -n rg-cloudsec-autoaudit --yes</pre><button class="copybtn" onclick="copyCmd('zcmd2',this)">복사</button></div>
+      </div>
+    </div>
+
+    <div class="crit-hint">⚠️ <b>자동 차단(auto)</b>은 잘못되면 정상 서비스를 막을 수 있어 기본이 <b>반자동(suggest)</b>입니다.
+      실제 자동 차단은 관리 ID에 기여자(수정) 권한 추가 + <code>DryRun=false</code> + <code>ProtectTags</code>를 함께 설정하고 소규모부터 적용하세요.</div>
+    <div class="hint" style="margin-top:10px">자세한 내용: 프로젝트의 <code>deploy-azure/README.md</code>. 수집이 비면 관리 ID의 Reader 역할·<code>AZURE_SUBSCRIPTION_ID</code>를 확인(역할 전파에 몇 분 소요).</div>
+   </div><!-- /auto-azure -->
   </div>
  </div><!-- /pane-auto -->
 </main>
@@ -346,6 +432,16 @@ function switchTab(t){
   document.getElementById('tab-commands').classList.toggle('active', t==='commands');
   document.getElementById('tab-auto').classList.toggle('active', t==='auto');
   if(t==='commands' && !CMD_DATA){ loadCommands(); }
+  if(t==='auto'){ setAutoCloud('aws'); }
+}
+// 자동화 배포 가이드: AWS/Azure 절차 전환
+function setAutoCloud(c){
+  var aws=document.getElementById('auto-aws'), az=document.getElementById('auto-azure');
+  if(aws) aws.style.display=(c==='aws')?'block':'none';
+  if(az) az.style.display=(c==='azure')?'block':'none';
+  var ba=document.getElementById('ac-aws'), bz=document.getElementById('ac-azure');
+  if(ba) ba.style.opacity=(c==='aws')?'1':'0.5';
+  if(bz) bz.style.opacity=(c==='azure')?'1':'0.5';
 }
 
 // 업로드한 파일명(있으면 저장 파일명에 포함). 붙여넣기만 한 경우엔 빈 문자열.

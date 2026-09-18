@@ -65,7 +65,7 @@ def collect(platform: str, use_mock: bool = False, timeout: int = 60) -> dict:
     if use_mock:
         return {"text": mock_data(platform), "threat_text": "", "ran": 0, "source": "mock"}
 
-    # AWS는 boto3(SDK)를 우선 시도 — Lambda 등 CLI 없는 환경에서 실제 수집 가능
+    # SDK 우선 시도 — Functions/Lambda 등 CLI 없는 환경에서 실제 수집 가능
     if platform == "aws":
         try:
             from . import collector_boto3
@@ -75,6 +75,16 @@ def collect(platform: str, use_mock: bool = False, timeout: int = 60) -> dict:
                     return {"text": r["text"], "threat_text": r.get("threat_text", ""),
                             "ran": r.get("ran", 0), "source": "boto3"}
         except Exception:  # noqa: BLE001 - boto3 수집 실패 시 CLI/목업으로 폴백
+            pass
+    elif platform == "azure":
+        try:
+            from . import collector_azure_sdk
+            if collector_azure_sdk.available():
+                r = collector_azure_sdk.collect()
+                if r.get("text"):
+                    return {"text": r["text"], "threat_text": r.get("threat_text", ""),
+                            "ran": r.get("ran", 0), "source": "azure_sdk"}
+        except Exception:  # noqa: BLE001 - SDK 수집 실패 시 CLI/목업으로 폴백
             pass
 
     if not _cli_available(platform):

@@ -1,0 +1,9 @@
+# Azure Functions dependencies. Installed automatically on 'func azure functionapp publish'.
+# The core analysis engine uses only the Python standard library; these SDKs are only
+# needed for real collection from the subscription (collector_azure_sdk).
+azure-functions
+azure-identity
+azure-mgmt-network
+azure-mgmt-storage
+azure-mgmt-sql
+azure-mgmt-security

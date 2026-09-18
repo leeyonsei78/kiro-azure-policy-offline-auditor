@@ -1,0 +1,7 @@
+.git*
+.venv
+tests
+samples
+deploy
+__pycache__
+*.md
