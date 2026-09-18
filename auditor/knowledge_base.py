@@ -4,7 +4,7 @@
 각 항목: code(통제번호), domain(영역명), desc(점검목적), resources(관련 리소스 태그),
 그리고 플랫폼별(azure/aws) {cmd(참고 CLI), criteria(문제 판단기준), fix(개선방안)}.
 
-출처: 사내 참고자료 'isms-cloud-audit-matrix'(ISMS-P 인증기준 재구성). KISA 공식 심사자료를 대체하지 않음.
+출처: 사내 참고자료 'isms-cloud-audit-matrix'(ISMS-P 인증기준 재구성).
 이 모듈은 인터넷 없이 동작하도록 데이터를 코드에 임베드한다(폐쇄망 전제).
 """
 
