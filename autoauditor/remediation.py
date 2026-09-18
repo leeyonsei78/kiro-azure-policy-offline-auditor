@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from dataclasses import dataclass, field, asdict
 
@@ -150,11 +151,21 @@ def _maybe_execute(a: RemediationAction, cfg) -> None:
         a.status = "skipped_protected"
         a.result = "파괴적 작업은 자동 실행하지 않음"
         return
+    # 보안: 셸 메타문자(파이프/리다이렉트/명령연결)가 있으면 자동 실행 거부.
+    # 정상 차단 명령에는 이런 문자가 없으므로, 있으면 비정상으로 보고 수동 검토로 넘긴다.
+    if any(ch in a.command for ch in ("|", "&", ";", ">", "<", "`", "$(")):
+        a.status = "skipped_protected"
+        a.result = "셸 메타문자 포함 명령은 자동 실행하지 않음(수동 검토)"
+        return
     try:
-        use_shell = "|" in a.command
+        # shell=False(기본) + shlex 토큰화 — 셸을 거치지 않아 인젝션 위험 없음
+        args = shlex.split(a.command)
+        if not args:
+            a.status = "failed"
+            a.result = "빈 명령"
+            return
         proc = subprocess.run(
-            a.command if use_shell else a.command.split(),
-            shell=use_shell, capture_output=True, text=True, timeout=60,
+            args, capture_output=True, text=True, timeout=60,
         )
         if proc.returncode == 0:
             a.status = "executed"

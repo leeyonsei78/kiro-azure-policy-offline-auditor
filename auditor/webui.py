@@ -1172,14 +1172,22 @@ class Handler(BaseHTTPRequestHandler):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="클라우드 정책 오프라인 보안검토(AWS/Azure) - 로컬 웹 UI")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="바인딩 주소(기본 127.0.0.1=로컬 전용, 권장). "
+                             "0.0.0.0 등 외부 주소는 네트워크 노출 위험이 있으니 주의")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    # 보안 경고: 로컬 루프백(127.0.0.1)이 아닌 주소로 바인딩하면 같은 네트워크의
+    # 다른 기기에서 접근 가능해진다. 이 도구는 인증이 없으므로 로컬 사용을 권장한다.
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print("⚠️  경고: 이 서버는 인증이 없습니다. 로컬(127.0.0.1)이 아닌 주소로 바인딩하면")
+        print(f"    같은 네트워크의 다른 기기에서 접근할 수 있습니다(현재: {args.host}).")
+        print("    신뢰된 폐쇄망에서만, 필요한 경우에만 사용하세요.")
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"웹 UI: http://{args.host}:{args.port}  (Ctrl+C로 종료)")
-    print("폐쇄망 전용 · 외부 네트워크 연결 없음")
+    print("폐쇄망 전용 · 외부 네트워크 연결 없음(Slack 알림은 자동화 모듈에서만, 선택)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -12,6 +12,7 @@ auditor.engine.analyze()가 그대로 분석할 수 있다.
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
 
@@ -38,19 +39,33 @@ def _placeholder_free(cmd: str) -> bool:
 
 
 def _run(cmd: str, timeout: int = 60) -> str | None:
-    """CLI 명령 한 줄 실행 → stdout(JSON 기대). 실패 시 None."""
+    """CLI 명령 한 줄 실행 → stdout(JSON 기대). 실패 시 None.
+
+    보안: 셸을 거치지 않고(shell 미사용) 프로그램을 직접 실행한다(셸 인젝션 방지).
+    명령은 shlex로 안전하게 토큰화하며, 파이프(`|`)가 있으면 각 단계를 파이썬에서
+    stdin/stdout으로 직접 연결한다.
+    """
     try:
-        # 파이프(| base64 등)가 있으면 shell 필요
-        use_shell = "|" in cmd
-        proc = subprocess.run(
-            cmd if use_shell else cmd.split(),
-            shell=use_shell,
-            capture_output=True, text=True, timeout=timeout,
-        )
-        if proc.returncode != 0:
-            return None
-        return proc.stdout
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        stages = [s.strip() for s in cmd.split("|")]
+        prev_out: bytes | None = None
+        last_stdout = ""
+        for i, stage in enumerate(stages):
+            args = shlex.split(stage)
+            if not args:
+                return None
+            proc = subprocess.run(
+                args,
+                input=prev_out,
+                capture_output=True,
+                timeout=timeout,
+                # shell=False (기본) — 셸을 거치지 않고 프로그램을 직접 실행
+            )
+            if proc.returncode != 0:
+                return None
+            prev_out = proc.stdout
+            last_stdout = proc.stdout.decode("utf-8", errors="replace")
+        return last_stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, ValueError):
         return None
 
 
