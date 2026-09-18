@@ -57,11 +57,28 @@ def _run(cmd: str, timeout: int = 60) -> str | None:
 def collect(platform: str, use_mock: bool = False, timeout: int = 60) -> dict:
     """플랫폼 구성 정보를 수집.
 
-    반환: {"text": 이어붙인 JSON 텍스트, "ran": 실행된 명령 수, "source": "cli"|"mock"}
+    수집 우선순위: (AWS) boto3 SDK → CLI → 목업 / (Azure) CLI → 목업.
+    반환: {"text": JSON 텍스트, "threat_text": 침해 JSON(있으면), "ran": 수집 수,
+           "source": "boto3"|"cli"|"mock"}
     text는 auditor.engine.analyze()에 그대로 넣을 수 있다.
     """
-    if use_mock or not _cli_available(platform):
-        return {"text": mock_data(platform), "ran": 0, "source": "mock"}
+    if use_mock:
+        return {"text": mock_data(platform), "threat_text": "", "ran": 0, "source": "mock"}
+
+    # AWS는 boto3(SDK)를 우선 시도 — Lambda 등 CLI 없는 환경에서 실제 수집 가능
+    if platform == "aws":
+        try:
+            from . import collector_boto3
+            if collector_boto3.available():
+                r = collector_boto3.collect()
+                if r.get("text"):
+                    return {"text": r["text"], "threat_text": r.get("threat_text", ""),
+                            "ran": r.get("ran", 0), "source": "boto3"}
+        except Exception:  # noqa: BLE001 - boto3 수집 실패 시 CLI/목업으로 폴백
+            pass
+
+    if not _cli_available(platform):
+        return {"text": mock_data(platform), "threat_text": "", "ran": 0, "source": "mock"}
 
     chunks: list[str] = []
     ran = 0
@@ -80,8 +97,8 @@ def collect(platform: str, use_mock: bool = False, timeout: int = 60) -> dict:
                 ran += 1
     if not chunks:
         # CLI는 있으나 아무것도 못 모았으면 목업으로라도 파이프라인 유지
-        return {"text": mock_data(platform), "ran": 0, "source": "mock"}
-    return {"text": "\n\n".join(chunks), "ran": ran, "source": "cli"}
+        return {"text": mock_data(platform), "threat_text": "", "ran": 0, "source": "mock"}
+    return {"text": "\n\n".join(chunks), "threat_text": "", "ran": ran, "source": "cli"}
 
 
 # ---------------------------------------------------------------------------

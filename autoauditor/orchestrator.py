@@ -74,6 +74,10 @@ def run_once(cfg: Config | None = None, *, config_text: str | None = None,
         config_text = col["text"]
         source = col["source"]
         ran = col["ran"]
+        # 수집기가 침해 신호(예: boto3의 GuardDuty)를 함께 가져왔고, 별도 threat_text가
+        # 지정되지 않았으면 그것을 침해 탐지 입력으로 사용.
+        if threat_text is None and col.get("threat_text"):
+            threat_text = col["threat_text"]
     else:
         source, ran = "provided", 0
 

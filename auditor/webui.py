@@ -111,6 +111,14 @@ INDEX_HTML = """<!DOCTYPE html>
   .mitre{ display:inline-block; font-size:11px; font-weight:700; color:#c39bff; background:#241a38; border:1px solid #4b3a6b; padding:1px 7px; border-radius:4px; margin-right:6px; }
   .loc{ font-size:12px; color:#bfe3ff; background:#0e2233; border-left:3px solid #2f6f9f; border-radius:5px; padding:4px 9px; margin-top:4px; }
   .rsbadge{ font-size:11px; font-weight:700; color:#04121f; background:#ffd166; padding:1px 7px; border-radius:4px; }
+  .autostep{ display:flex; gap:12px; margin:12px 0; padding:12px; background:var(--panel2); border:1px solid var(--border); border-radius:10px; }
+  .autonum{ flex:0 0 auto; width:28px; height:28px; line-height:28px; text-align:center; border-radius:50%; background:#4da3ff; color:#04121f; font-weight:800; }
+  .autobody{ flex:1; font-size:13px; line-height:1.6; }
+  .autobody ul{ margin:6px 0 0; padding-left:18px; }
+  .autobody li{ margin:2px 0; }
+  .opttbl{ border-collapse:collapse; width:100%; margin:8px 0; font-size:12px; }
+  .opttbl th,.opttbl td{ border:1px solid var(--border); padding:4px 8px; text-align:left; }
+  .opttbl th{ background:#0b1220; }
   .statgrid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; margin:6px 0; }
   .statcard{ background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:12px; }
   .statt{ font-size:13px; font-weight:700; color:#cfe3ff; margin-bottom:8px; }
@@ -170,6 +178,7 @@ INDEX_HTML = """<!DOCTYPE html>
 <div class="tabs">
   <div class="tab active" id="tab-audit" onclick="switchTab('audit')">🔎 보안검토</div>
   <div class="tab" id="tab-commands" onclick="switchTab('commands')">📋 수집 명령어 가이드</div>
+  <div class="tab" id="tab-auto" onclick="switchTab('auto')">🤖 자동화 배포 가이드</div>
 </div>
 <main>
  <div id="pane-audit">
@@ -243,6 +252,86 @@ INDEX_HTML = """<!DOCTYPE html>
   <div id="cmd-list"></div>
   <div class="hint" style="margin:0 0 20px">※ 명령의 &lt;NSG&gt;·&lt;RG&gt;·&lt;BUCKET&gt; 등 자리표시자는 실제 값으로 바꿔 사용하세요. 조직 계정·리전·CLI 버전·권한에 맞게 조정이 필요할 수 있습니다.</div>
  </div><!-- /pane-commands -->
+
+ <div id="pane-auto" style="display:none">
+  <div class="card">
+    <div class="banner">🤖 <b>자동화 배포 가이드</b> — 이 프로그램을 <b>AWS Lambda</b>에 올려두면, 정해진 주기마다
+      <b>자동으로 점검·침해탐지</b>하고 심각한 것은 <b>Slack</b>으로 알려줍니다. 아래 순서대로 따라 하세요.</div>
+
+    <div class="autostep">
+      <div class="autonum">1</div>
+      <div class="autobody">
+        <b>사전 준비</b>
+        <ul>
+          <li>AWS <b>SAM CLI</b> 설치 (AWS 공식 "Install SAM CLI" 문서)</li>
+          <li>AWS 자격증명 구성: <code>aws configure</code> (배포 권한: CloudFormation/Lambda/IAM/S3/Events)</li>
+          <li>기존 <b>Slack Incoming Webhook URL</b> 준비 (지금 쓰시는 워크스페이스·채널 것 그대로)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="autostep">
+      <div class="autonum">2</div>
+      <div class="autobody">
+        <b>배포 (한 줄)</b> — 프로젝트의 <code>deploy</code> 폴더에서 실행합니다. Webhook URL만 본인 것으로 바꾸세요.
+        <div class="cmdline"><pre id="acmd1">cd deploy
+deploy.bat "https://hooks.slack.com/services/XXX/YYY/ZZZ" "rate(1 hour)"</pre><button class="copybtn" onclick="copyCmd('acmd1',this)">복사</button></div>
+        <div class="hint">Linux/mac는 <code>./deploy.sh "웹훅URL" "rate(1 hour)"</code> · 2번째 값은 주기(예: <code>rate(6 hours)</code>, <code>cron(0 9 * * ? *)</code>)</div>
+      </div>
+    </div>
+
+    <div class="autostep">
+      <div class="autonum">3</div>
+      <div class="autobody">
+        <b>바로 한 번 실행해 Slack 확인</b> — 스케줄을 기다리지 않고 즉시 테스트합니다.
+        <div class="cmdline"><pre id="acmd2">aws lambda invoke --function-name cloud-sec-auto-auditor out.json</pre><button class="copybtn" onclick="copyCmd('acmd2',this)">복사</button></div>
+        <div class="hint">심각(HIGH↑)하거나 침해가 탐지되면 Slack 채널로 요약이 도착합니다. (그 미만이면 소음 방지를 위해 전송 안 함)</div>
+      </div>
+    </div>
+
+    <div class="autostep">
+      <div class="autonum">4</div>
+      <div class="autobody">
+        <b>동작 방식 (무엇이 자동으로 되나요)</b>
+        <ul>
+          <li>매 주기마다 <b>boto3(AWS SDK)</b>로 실제 계정의 보안그룹·RDS·S3·IAM·GuardDuty를 수집</li>
+          <li>이 프로그램의 <b>같은 분석 엔진</b>으로 위험 점수·복합 위험 판정 + 침해(무차별 대입·루트 사용·악성 IP) 탐지</li>
+          <li>심각/침해 시 <b>Slack 알림</b>, 결과 리포트는 Lambda <code>/tmp</code>에 생성(요약은 로그·Slack으로 확인)</li>
+          <li>차단/대응은 기본 <b>반자동</b>(명령만 생성) — 실제 변경은 하지 않아 안전</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="autostep">
+      <div class="autonum">5</div>
+      <div class="autobody">
+        <b>옵션 조정</b> (배포 시 값 전달)
+        <table class="opttbl">
+          <tr><th>파라미터</th><th>설명</th><th>기본</th></tr>
+          <tr><td>AlertMinSeverity</td><td>알림 최소 심각도</td><td>HIGH</td></tr>
+          <tr><td>Remediation</td><td>off / suggest(반자동) / auto</td><td>suggest</td></tr>
+          <tr><td>DryRun</td><td>true면 auto라도 실제 변경 안 함</td><td>true</td></tr>
+          <tr><td>ProtectTags</td><td>차단 금지(화이트리스트) 키워드, 쉼표구분</td><td>(없음)</td></tr>
+          <tr><td>Schedule</td><td>실행 주기(EventBridge 식)</td><td>rate(1 hour)</td></tr>
+        </table>
+        <div class="cmdline"><pre id="acmd3">sam deploy --parameter-overrides SlackWebhook="웹훅URL" Schedule="rate(6 hours)" ProtectTags="prod-critical,dns"</pre><button class="copybtn" onclick="copyCmd('acmd3',this)">복사</button></div>
+      </div>
+    </div>
+
+    <div class="autostep">
+      <div class="autonum">6</div>
+      <div class="autobody">
+        <b>로그 확인 · 삭제</b>
+        <div class="cmdline"><pre id="acmd4">sam logs --name cloud-sec-auto-auditor --tail</pre><button class="copybtn" onclick="copyCmd('acmd4',this)">복사</button></div>
+        <div class="cmdline"><pre id="acmd5">sam delete --stack-name cloud-sec-auto-auditor</pre><button class="copybtn" onclick="copyCmd('acmd5',this)">복사</button></div>
+      </div>
+    </div>
+
+    <div class="crit-hint">⚠️ <b>자동 차단(auto)</b>은 잘못되면 정상 서비스를 막을 수 있어 기본이 <b>반자동(suggest)</b>입니다.
+      실제 자동 차단을 켜려면 <code>Remediation=auto</code> + <code>DryRun=false</code> + <code>ProtectTags</code>(보호 리소스)를 반드시 함께 설정하고, 소규모부터 신중히 적용하세요.</div>
+    <div class="hint" style="margin-top:10px">자세한 내용: 프로젝트의 <code>deploy/README.md</code>. Slack이 안 오면 (1) Webhook URL, (2) 이번 주기에 HIGH↑ 이슈/침해 존재 여부, (3) <code>aws lambda invoke</code>로 즉시 테스트해 로그 확인.</div>
+  </div>
+ </div><!-- /pane-auto -->
 </main>
 <script>
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -252,8 +341,10 @@ function nl2br(s){ return String(s==null?'':s).replace(/\\n/g,'<br>'); }
 function switchTab(t){
   document.getElementById('pane-audit').style.display = (t==='audit')?'block':'none';
   document.getElementById('pane-commands').style.display = (t==='commands')?'block':'none';
+  document.getElementById('pane-auto').style.display = (t==='auto')?'block':'none';
   document.getElementById('tab-audit').classList.toggle('active', t==='audit');
   document.getElementById('tab-commands').classList.toggle('active', t==='commands');
+  document.getElementById('tab-auto').classList.toggle('active', t==='auto');
   if(t==='commands' && !CMD_DATA){ loadCommands(); }
 }
 

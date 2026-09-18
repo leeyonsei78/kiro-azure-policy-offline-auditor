@@ -1,0 +1,20 @@
+# SAM config for cloud-sec-auto-auditor. English comments only (cp949-safe on Windows).
+# You can override any value at deploy time with: sam deploy --parameter-overrides ...
+version = 0.1
+
+[default.global.parameters]
+stack_name = "cloud-sec-auto-auditor"
+
+[default.build.parameters]
+# Nothing to build (pure standard library + boto3 provided by Lambda runtime).
+cached = true
+
+[default.deploy.parameters]
+stack_name = "cloud-sec-auto-auditor"
+region = "ap-northeast-2"
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+confirm_changeset = false
+# IMPORTANT: pass real values with --parameter-overrides at deploy time, e.g.
+#   sam deploy --parameter-overrides SlackWebhook="https://hooks.slack.com/services/..." Schedule="rate(1 hour)"
+parameter_overrides = "Platform=aws AlertMinSeverity=HIGH Remediation=suggest DryRun=true Schedule=\"rate(1 hour)\""

@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+# Cloud Security Auto-Auditor - scheduled Lambda that collects AWS config via boto3,
+# analyzes with the offline engine, detects intrusion signals, and posts a summary
+# to Slack. Keep all comments in English (avoid cp949 build errors on Windows).
+
+Description: Scheduled cloud security auto-auditor (boto3 collect -> analyze -> Slack alert)
+
+Parameters:
+  SlackWebhook:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Slack Incoming Webhook URL. Leave empty to disable Slack alerts.
+  Platform:
+    Type: String
+    Default: aws
+    AllowedValues: [aws, azure]
+    Description: Target cloud platform.
+  AlertMinSeverity:
+    Type: String
+    Default: HIGH
+    AllowedValues: [CRITICAL, HIGH, MEDIUM, LOW]
+    Description: Minimum severity to send a Slack alert.
+  Remediation:
+    Type: String
+    Default: suggest
+    AllowedValues: [off, suggest, auto]
+    Description: Remediation mode. suggest (default) only generates commands.
+  DryRun:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: If true, no real changes are made even in auto mode.
+  ProtectTags:
+    Type: String
+    Default: ""
+    Description: Comma-separated whitelist keywords that must never be blocked.
+  Schedule:
+    Type: String
+    Default: rate(1 hour)
+    Description: EventBridge schedule expression.
+
+Globals:
+  Function:
+    Timeout: 120
+    MemorySize: 256
+
+Resources:
+  AutoAuditorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cloud-sec-auto-auditor
+      # CodeUri points to the project root so both auditor/ and autoauditor/
+      # packages are packaged together.
+      CodeUri: ../
+      Handler: autoauditor.lambda_function.handler
+      Runtime: python3.12
+      Environment:
+        Variables:
+          AUTOAUDITOR_PLATFORM: !Ref Platform
+          AUTOAUDITOR_SLACK_WEBHOOK: !Ref SlackWebhook
+          AUTOAUDITOR_ALERT_MIN_SEVERITY: !Ref AlertMinSeverity
+          AUTOAUDITOR_REMEDIATION: !Ref Remediation
+          AUTOAUDITOR_DRY_RUN: !Ref DryRun
+          AUTOAUDITOR_PROTECT_TAGS: !Ref ProtectTags
+          AUTOAUDITOR_OUTPUT_DIR: /tmp/autoaudit_out
+      Policies:
+        # Read-only access needed to collect configuration and threat signals.
+        - SecurityAudit
+        - ViewOnlyAccess
+      Events:
+        Schedule:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref Schedule
+            Name: cloud-sec-auto-auditor-schedule
+            Description: Periodic cloud security auto audit
+
+Outputs:
+  FunctionName:
+    Description: Lambda function name
+    Value: !Ref AutoAuditorFunction
+  ScheduleExpression:
+    Description: EventBridge schedule
+    Value: !Ref Schedule

@@ -332,8 +332,25 @@ python -m autoauditor --config-file config.json --threat-file logs.txt
 ```
 
 - **Windows**: `autoauditor\run_scheduled.bat` 을 작업 스케줄러(schtasks)에 등록
-- **AWS Lambda**: `autoauditor/lambda_function.py`의 `handler`를 EventBridge(rate(1 hour))로 트리거
-  (표준 라이브러리만 사용 → 의존성 패키징 불필요, 출력은 `/tmp`, Slack으로 요약 전송)
+
+### ☁️ AWS Lambda 자동 배포 (SAM, 권장)
+
+**한 줄 배포**로 Lambda + EventBridge(스케줄)를 만들고, 심각/침해 시 **Slack 알림**을 받습니다.
+Lambda 런타임에 기본 포함된 **boto3**로 실제 계정 데이터를 수집하므로 `aws` CLI가 필요 없습니다.
+
+```bash
+cd deploy
+# Windows:  deploy.bat "https://hooks.slack.com/services/XXX/YYY/ZZZ" "rate(1 hour)"
+./deploy.sh "https://hooks.slack.com/services/XXX/YYY/ZZZ" "rate(1 hour)"
+
+# 즉시 한 번 실행해 Slack 확인
+aws lambda invoke --function-name cloud-sec-auto-auditor out.json
+```
+
+- 사전 준비: **AWS SAM CLI** 설치 + `aws configure`(배포 권한)
+- 스케줄·심각도·차단 모드 등은 `--parameter-overrides`로 조정 (상세: **`deploy/README.md`**)
+- **화면(웹 UI)의 "🤖 자동화 배포 가이드" 탭**에 동일 절차가 복사 버튼과 함께 단계별로 안내됩니다.
+- 삭제: `sam delete --stack-name cloud-sec-auto-auditor`
 
 ### 🛡️ 자동 차단의 안전장치 (중요)
 
@@ -368,6 +385,7 @@ azure-policy-offline-auditor/
     __main__.py          # python -m autoauditor 진입점(1회 실행)
     config.py            # 설정(환경변수, 안전장치 옵션)
     collector.py         # aws/az CLI 자동 수집(+목업 폴백)
+    collector_boto3.py   # boto3(AWS SDK) 수집 — Lambda 등 CLI 없는 환경용
     threat.py            # 침해 탐지·상관분석(GuardDuty/Defender/로그)
     notifier.py          # Slack 알림(표준 라이브러리 urllib)
     remediation.py       # 차단/대응 명령 생성(반자동+안전장치)
@@ -375,6 +393,11 @@ azure-policy-offline-auditor/
     lambda_function.py   # AWS Lambda 핸들러(EventBridge 스케줄)
     run_scheduled.sh     # Linux/mac cron 실행 스크립트
     run_scheduled.bat    # Windows 작업 스케줄러 실행 스크립트
+  deploy/                # AWS Lambda 배포(SAM)
+    template.yaml        # SAM 템플릿(Lambda + EventBridge 스케줄 + 읽기 IAM)
+    samconfig.toml       # 배포 기본값
+    deploy.sh / deploy.bat  # 한 줄 배포 스크립트
+    README.md            # 배포 가이드(단계별)
   samples/               # 예시 입력 파일
   tests/                 # 단위 테스트 (python -m unittest)
   README.md
