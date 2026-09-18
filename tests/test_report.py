@@ -121,7 +121,7 @@ class TestXlsx(unittest.TestCase):
         sheets = [n for n in names
                   if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
         self.assertEqual(len(sheets), 3)
-        # 발표용 차트 포함
+        # 통계 차트 포함
         self.assertIn("xl/charts/chart1.xml", names)
 
     def test_all_xml_parseable(self):

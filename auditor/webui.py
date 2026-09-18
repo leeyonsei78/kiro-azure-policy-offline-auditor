@@ -58,7 +58,7 @@ INDEX_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>클라우드 정책 오프라인 보안검토 (ISMS-P · AWS/Azure)</title>
+<title>클라우드 전용 보안검토 (ISMS-P · AWS/Azure)</title>
 <style>
   :root{ --bg:#0e1626; --panel:#152036; --panel2:#1c2942; --border:#2a3a5a; --text:#e8eefc;
     --muted:#93a3c4; --accent:#4da3ff; --crit:#ff5d6c; --high:#ff9f43; --med:#ffd43b; --low:#4dabf7; --info:#8a9bbd; }
@@ -135,12 +135,10 @@ INDEX_HTML = """<!DOCTYPE html>
   .trendbar{ display:flex; gap:8px; flex-wrap:wrap; margin:6px 0; }
   .tb{ font-size:13px; font-weight:700; padding:4px 10px; border-radius:8px; border:1px solid var(--border); }
   .tb-new{ background:#2a1518; color:#ff9b9b; }
-  .tb-res{ background:#0f2418; color:#8fe6b0; }
   .tb-keep{ background:#12233a; color:#cfe3ff; }
   .tb-score{ background:#241a38; color:#e0c8ff; }
   .tritem{ font-size:12px; padding:3px 8px; margin:2px 0; border-radius:5px; }
   .tri-new{ background:#2a1518; }
-  .tri-res{ background:#0f2418; }
   .evlabel{ margin-top:8px; font-size:12px; color:var(--muted); }
   .exbad{ margin-top:6px; padding:6px 10px; background:#2a1518; border-left:3px solid var(--crit); border-radius:6px; font-size:12px; }
   .exgood{ margin-top:6px; padding:6px 10px; background:#0f2418; border-left:3px solid #37d67a; border-radius:6px; font-size:12px; }
@@ -172,13 +170,13 @@ INDEX_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>🛡️ 클라우드 정책 오프라인 보안검토 <span class="sub">(ISMS-P · AWS/Azure)</span> <span class="sub" style="font-size:12px;opacity:.7">v4 (해결가이드·따라하기 포함)</span></h1>
+  <h1>🛡️ 클라우드 전용 보안검토 <span class="sub">(ISMS-P · AWS/Azure)</span> <span class="sub" style="font-size:12px;opacity:.7">v4 (해결가이드·따라하기 포함)</span></h1>
   <div class="sub">AWS(<code>aws ...</code>)/Azure(<code>az ...</code>) CLI로 추출한 정책·구성 텍스트를 붙여넣거나 업로드하면, <b>인터넷·AI 없이</b> 이슈를 찾고 개선안을 제안합니다. 플랫폼은 자동으로 구별됩니다.</div>
 </header>
 <div class="tabs">
   <div class="tab active" id="tab-audit" onclick="switchTab('audit')">🔎 보안검토</div>
   <div class="tab" id="tab-commands" onclick="switchTab('commands')">📋 수집 명령어 가이드</div>
-  <div class="tab" id="tab-auto" onclick="switchTab('auto')">🤖 자동화 배포 가이드</div>
+  <div class="tab" id="tab-auto" onclick="switchTab('auto')">⚙️ 자동화 배포 가이드</div>
 </div>
 <main>
  <div id="pane-audit">
@@ -188,8 +186,7 @@ INDEX_HTML = """<!DOCTYPE html>
     <label>AWS/Azure 정책·구성 텍스트 (붙여넣기)</label>
     <textarea id="input" placeholder='예) [{"name":"allow-ssh","access":"Allow","direction":"Inbound","sourceAddressPrefix":"*","destinationPortRange":"22"}]'></textarea>
     <div class="row">
-      <input type="file" id="file" accept=".txt,.json,.log,.tsv">
-      <button class="btn" onclick="loadFile()">파일 불러오기</button>
+      <input type="file" id="file" accept=".txt,.json,.log,.tsv" onchange="loadFile()">
       <button class="btn primary" onclick="runAudit()">보안검토 실행</button>
       <button class="btn" onclick="clearAll()">지우기</button>
       <span class="hint">파일 업로드도 로컬에서만 읽어 텍스트칸에 채웁니다(서버 전송 시에도 저장 안 함).</span>
@@ -224,7 +221,7 @@ INDEX_HTML = """<!DOCTYPE html>
     <div id="trend"></div>
     <div id="summary"></div>
     <div id="findings"></div>
-    <div class="hint" style="margin-top:14px">※ 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.</div>
+    <div class="hint" style="margin-top:14px">※ 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요.</div>
   </div>
  </div><!-- /pane-audit -->
 
@@ -255,7 +252,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
  <div id="pane-auto" style="display:none">
   <div class="card">
-    <div class="banner">🤖 <b>자동화 배포 가이드</b> — 이 프로그램을 클라우드에 올려두면, 정해진 주기마다
+    <div class="banner">⚙️ <b>자동화 배포 가이드</b> — 이 프로그램을 클라우드에 올려두면, 정해진 주기마다
       <b>자동으로 점검·침해탐지</b>하고 심각한 것은 <b>Slack</b>으로 알려줍니다. 아래 순서대로 따라 하세요.</div>
 
     <div class="row" style="margin:8px 0">
@@ -644,7 +641,7 @@ function render(r){
   updateFilterButtons();
   updateViewButtons();
 }
-// ── 발표용 통계 차트(순수 SVG, 외부 라이브러리 불필요) ──
+// ── 통계 차트(순수 SVG, 외부 라이브러리 불필요) ──
 var _SEVCOLOR={CRITICAL:'#e05563',HIGH:'#ff9a3d',MEDIUM:'#ffd166',LOW:'#4da3ff',INFO:'#8a9084'};
 var _BARCOLORS=['#4da3ff','#ff9900','#37d67a','#c39bff','#ffd166','#e05563','#5bc0de','#a0a0a0'];
 function _gaugeColor(score){
@@ -710,7 +707,7 @@ function renderStats(r){
   var st=r.statistics;
   if(!st || !st.total){ host.innerHTML=''; return; }
   function card(title, body){ return '<div class="statcard"><div class="statt">'+title+'</div>'+body+'</div>'; }
-  var html='<div class="sec">📊 통계 요약 (발표용)</div><div class="statgrid">';
+  var html='<div class="sec">📊 통계 요약</div><div class="statgrid">';
   // 심각도 도넛
   if(st.severity && st.severity.length)
     html+=card('심각도 분포', '<div class="donutwrap">'+_donutSVG(st.severity,120)+_legend(st.severity)+'</div>');
@@ -746,9 +743,8 @@ function renderTrend(r){
     var prev=null; try{ prev=JSON.parse(prevRaw); }catch(e){ prev=null; }
     if(prev && prev.items){
       var cur={}; (r.findings||[]).forEach(function(f){ cur[_findingKey(f)]=f; });
-      var added=[], resolved=[], kept=0;
+      var added=[], kept=0;
       Object.keys(cur).forEach(function(k){ if(!(k in prev.items)) added.push(cur[k]); else kept++; });
-      Object.keys(prev.items).forEach(function(k){ if(!(k in cur)) resolved.push(prev.items[k]); });
       var when = prev.ts ? prev.ts.replace('T',' ').substring(0,16) : '이전';
       var scoreDelta = (typeof prev.score==='number') ? (r.score - prev.score) : null;
       var deltaTxt = scoreDelta===null ? '' :
@@ -756,7 +752,6 @@ function renderTrend(r){
       html+='<div class="sec">📈 이전 점검 대비 변화 <span class="hint">(기준: '+esc(when)+')</span></div>';
       html+='<div class="trendbar">'+
         '<span class="tb tb-new">🆕 신규 '+added.length+'건</span>'+
-        '<span class="tb tb-res">✅ 해결 '+resolved.length+'건</span>'+
         '<span class="tb tb-keep">➖ 유지 '+kept+'건</span>'+
         '<span class="tb tb-score">점수 '+r.score+deltaTxt+'</span></div>';
       if(added.length){
@@ -764,17 +759,12 @@ function renderTrend(r){
         added.slice(0,10).forEach(function(f){ html+='<div class="tritem tri-new">🆕 ['+esc(f.severity)+'] '+esc(f.title)+'</div>'; });
         if(added.length>10) html+='<div class="hint">…외 '+(added.length-10)+'건</div>';
       }
-      if(resolved.length){
-        html+='<div class="meta" style="margin-top:6px"><b>해결됨:</b></div>';
-        resolved.slice(0,10).forEach(function(f){ html+='<div class="tritem tri-res">✅ '+esc(f.title)+'</div>'; });
-        if(resolved.length>10) html+='<div class="hint">…외 '+(resolved.length-10)+'건</div>';
-      }
       html+='<div class="row" style="margin-top:6px"><button class="btn" onclick="clearTrend()">이전 기준 지우기</button>'+
         '<span class="hint">지금 결과가 다음 비교의 기준으로 저장됩니다(이 브라우저에만 보관).</span></div>';
     }
   } else {
     html='<div class="sec">📈 이전 점검 대비 변화</div>'+
-      '<div class="hint">이전 점검 기록이 없습니다. 이번 결과를 기준으로 저장했으니, 다음 점검 때 신규/해결 이슈를 비교해 보여줍니다.</div>';
+      '<div class="hint">이전 점검 기록이 없습니다. 이번 결과를 기준으로 저장했으니, 다음 점검 때 신규 발생 이슈를 비교해 보여줍니다.</div>';
   }
   host.innerHTML=html;
   // 현재 결과를 다음 비교 기준으로 저장
@@ -1171,7 +1161,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="클라우드 정책 오프라인 보안검토(AWS/Azure) - 로컬 웹 UI")
+    parser = argparse.ArgumentParser(description="클라우드 전용 보안검토(AWS/Azure) - 로컬 웹 UI")
     parser.add_argument("--host", default="127.0.0.1",
                         help="바인딩 주소(기본 127.0.0.1=로컬 전용, 권장). "
                              "0.0.0.0 등 외부 주소는 네트워크 노출 위험이 있으니 주의")

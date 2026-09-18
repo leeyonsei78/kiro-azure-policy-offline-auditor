@@ -131,7 +131,7 @@ def format_text(report: AuditReport) -> str:
 
     lines.append("=" * 64)
     lines.append(" ※ 본 리포트는 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다.")
-    lines.append("    실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.")
+    lines.append("    실제 조치 전 대상 환경과 업무 요건을 확인하세요.")
     return "\n".join(lines)
 
 
@@ -286,7 +286,7 @@ def _html_hbars(items):
 
 
 def _stats_html(stats: dict) -> str:
-    """발표용 통계 차트 블록(도넛 + 가로막대)."""
+    """통계 차트 블록(도넛 + 가로막대)."""
     if not stats or not stats.get("total"):
         return ""
 
@@ -308,7 +308,7 @@ def _stats_html(stats: dict) -> str:
         parts.append(card("MITRE ATT&CK 기법별", _html_hbars(stats["mitre"])))
     if not parts:
         return ""
-    return "<h2>📊 통계 요약 (발표용)</h2><div class='statgrid'>" + "".join(parts) + "</div>"
+    return "<h2>📊 통계 요약</h2><div class='statgrid'>" + "".join(parts) + "</div>"
 
 
 def format_html(report: AuditReport) -> str:
@@ -383,7 +383,7 @@ def format_html(report: AuditReport) -> str:
     # 점수 게이지
     gauge_svg = _svg_gauge(d["score"], d["grade"])
 
-    # 발표용 통계 차트
+    # 통계 차트
     from .engine import build_statistics
     stats_html = _stats_html(d.get("statistics") or build_statistics(d))
 
@@ -476,7 +476,7 @@ def format_html(report: AuditReport) -> str:
   {stats_html}
   {summary_html}
   {body_sections}
-  <div class="foot">※ 본 리포트는 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요. KISA 공식 심사자료를 대체하지 않습니다.</div>
+  <div class="foot">※ 본 리포트는 오프라인 규칙 기반 자동 검토 결과이며 참고용입니다. 실제 조치 전 대상 환경과 업무 요건을 확인하세요.</div>
 </body></html>"""
 
 
@@ -575,7 +575,7 @@ def format_xlsx(report: AuditReport) -> bytes:
         ["심각도 분포", csum],
         ["플랫폼별", _platform_summary(report)],
         ["", ""],
-        ["※ 오프라인 규칙 기반 자동 검토 결과이며 참고용. KISA 공식 심사자료를 대체하지 않음.", ""],
+        ["※ 오프라인 규칙 기반 자동 검토 결과이며 참고용.", ""],
     ]
 
     # --- 상세 시트 데이터 ---

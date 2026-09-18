@@ -2070,7 +2070,7 @@ _SEV_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
 
 
 def build_statistics(report_dict: dict) -> dict:
-    """발표용 통계 집계. 화면·리포트가 SVG/CSS 차트로 그린다(외부 라이브러리 불필요).
+    """통계 집계. 화면·리포트가 SVG/CSS 차트로 그린다(외부 라이브러리 불필요).
 
     반환 각 항목: [{"label","value","key?"}] 형태(값 큰 순, 상위 N 제한).
     - severity: 심각도 분포
