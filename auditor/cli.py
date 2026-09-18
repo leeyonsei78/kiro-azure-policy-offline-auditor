@@ -101,9 +101,10 @@ def _print_ir(incident_type: str | None, platform: str, as_json: bool) -> None:
         print(ir_playbook.render_text(pb))
 
 
-def _print_appsec(text: str, filename: str, platform: str, mode: str, as_json: bool) -> int:
+def _print_appsec(text: str, filename: str, platform: str, mode: str, as_json: bool,
+                  lang: str = "auto") -> int:
     """앱 보안(간이 SAST/WAF) 점검 결과 출력. 이슈 있으면 1 반환."""
-    result = appsec.run(text, filename=filename, platform=platform, mode=mode)
+    result = appsec.run(text, filename=filename, platform=platform, mode=mode, lang=lang)
     if as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
@@ -148,6 +149,9 @@ def main(argv=None) -> int:
                         help="간이 SAST: 소스코드 파일(file/stdin)에서 위험 패턴 점검")
     parser.add_argument("--waf", action="store_true",
                         help="WAF 구성 점검: 입력(file/stdin)에서 WAF 활성·룰셋 여부 확인")
+    parser.add_argument("--lang", choices=["auto", "python", "js", "html", "sql", "all"],
+                        default="auto",
+                        help="--sast 대상 언어(기본 auto: 파일 확장자·내용으로 자동 감지)")
     args = parser.parse_args(argv)
 
     if args.web:
@@ -179,7 +183,8 @@ def main(argv=None) -> int:
                   file=sys.stderr)
             return 2
         mode = "both" if (args.sast and args.waf) else ("waf" if args.waf else "sast")
-        return _print_appsec(text, args.file or "", args.platform or "aws", mode, args.json)
+        return _print_appsec(text, args.file or "", args.platform or "aws", mode,
+                             args.json, lang=args.lang)
 
     if args.script:
         platform = args.platform or "azure"

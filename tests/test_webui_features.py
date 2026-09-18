@@ -33,6 +33,12 @@ class TestWebUiMarkup(unittest.TestCase):
                        "function renderAppsec", "loadIrTypes", "/api/ir_types"):
             self.assertIn(needle, INDEX_HTML, f"'{needle}' 누락")
 
+    def test_appsec_language_selector_present(self):
+        # 언어 선택 드롭다운과 옵션들이 화면에 있어야 함
+        for needle in ('id="as-lang"', 'value="python"', 'value="html"',
+                       'value="sql"', 'value="all"', "자동 감지"):
+            self.assertIn(needle, INDEX_HTML, f"'{needle}' 누락")
+
 
 class TestWebUiEndpoints(unittest.TestCase):
     @classmethod
@@ -92,6 +98,24 @@ class TestWebUiEndpoints(unittest.TestCase):
         status, d = self._post("/api/appsec", {"text": "{}", "mode": "waf", "platform": "azure"})
         self.assertEqual(status, 200)
         self.assertEqual([f["issue_type"] for f in d["findings"]], ["waf_not_found"])
+
+    def test_appsec_lang_explicit(self):
+        # 명시적 lang=sql 전달 시 SQL 규칙 적용 + lang 반환
+        status, d = self._post("/api/appsec", {
+            "text": "GRANT ALL PRIVILEGES ON db.* TO 'a'@'x';",
+            "mode": "sast", "lang": "sql"})
+        self.assertEqual(status, 200)
+        self.assertEqual(d["lang"], "sql")
+        self.assertIn("sast_sql_grant_all", {f["issue_type"] for f in d["findings"]})
+
+    def test_appsec_lang_auto_by_filename(self):
+        # 파일명 확장자로 언어 자동 감지(HTML)
+        status, d = self._post("/api/appsec", {
+            "text": '<a href="https://x.com" target="_blank">y</a>',
+            "mode": "sast", "lang": "auto", "filename": "index.html"})
+        self.assertEqual(status, 200)
+        self.assertEqual(d["lang"], "html")
+        self.assertIn("sast_target_blank_noopener", {f["issue_type"] for f in d["findings"]})
 
 
 if __name__ == "__main__":

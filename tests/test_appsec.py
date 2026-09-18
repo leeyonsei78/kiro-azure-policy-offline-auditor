@@ -107,12 +107,16 @@ class TestWaf(unittest.TestCase):
 
 class TestRun(unittest.TestCase):
     def test_run_sast_mode(self):
-        r = appsec.run('password = "abc123"\neval(x)', mode="sast")
+        r = appsec.run('password = "abc123"\neval(x)', filename="app.py", mode="sast")
         self.assertTrue(r["ok"])
         self.assertEqual(r["mode"], "sast")
-        self.assertEqual(r["total"], 2)
+        self.assertGreaterEqual(r["total"], 2)
+        types = {f["issue_type"] for f in r["findings"]}
+        self.assertIn("sast_hardcoded_secret", types)
+        self.assertIn("sast_dangerous_eval", types)
         self.assertIn("HIGH", r["severity_counts"])
         self.assertTrue(r["notes"])
+        self.assertIn("lang", r)
 
     def test_run_waf_mode(self):
         r = appsec.run('{}', mode="waf", platform="azure")
@@ -137,6 +141,140 @@ class TestRun(unittest.TestCase):
         r = appsec.run('password = "abc123"', mode="sast")
         self.assertIsInstance(r["findings"][0], dict)
         self.assertEqual(r["findings"][0]["severity"], "HIGH")
+
+    def test_run_returns_lang(self):
+        r = appsec.run('os.chmod(p, 0o777)', filename="a.py", mode="sast")
+        self.assertEqual(r["lang"], "python")
+
+
+class TestPythonRules(unittest.TestCase):
+    """확장된 파이썬 취약점 규칙."""
+
+    def test_insecure_file_perms(self):
+        f = appsec.scan_source("os.chmod(path, 0o777)", "a.py", lang="python")
+        self.assertIn("sast_insecure_file_perms", _types(f))
+
+    def test_path_traversal(self):
+        f = appsec.scan_source('open(os.path.join(base, request.args["n"]))', "a.py", lang="python")
+        self.assertIn("sast_path_traversal", _types(f))
+
+    def test_xxe_risk(self):
+        f = appsec.scan_source("import xml.etree.ElementTree as ET", "a.py", lang="python")
+        self.assertIn("sast_xxe_risk", _types(f))
+
+    def test_assert_for_security(self):
+        f = appsec.scan_source("assert user.is_admin, 'forbidden'", "a.py", lang="python")
+        self.assertIn("sast_assert_for_security", _types(f))
+
+    def test_insecure_tempfile(self):
+        f = appsec.scan_source("path = tempfile.mktemp()", "a.py", lang="python")
+        self.assertIn("sast_insecure_tempfile", _types(f))
+
+    def test_bind_all_interfaces(self):
+        f = appsec.scan_source('app.run(host="0.0.0.0")', "a.py", lang="python")
+        self.assertIn("sast_flask_ssl_none", _types(f))
+
+
+class TestCommonRules(unittest.TestCase):
+    def test_hardcoded_ip(self):
+        f = appsec.scan_source('DB_HOST = "192.168.10.25"', "a.py", lang="python")
+        self.assertIn("sast_private_ip_hardcoded", _types(f))
+
+    def test_version_string_not_flagged_as_ip(self):
+        # 1.2.3.4 같은 버전 문자열/자리표시자는 IP로 잡지 않음(오탐 완화)
+        f = appsec.scan_source('version = "1.2.3.4"', "a.py", lang="python")
+        self.assertNotIn("sast_private_ip_hardcoded", _types(f))
+
+    def test_loopback_not_flagged(self):
+        f = appsec.scan_source('host = "127.0.0.1"', "a.py", lang="python")
+        self.assertNotIn("sast_private_ip_hardcoded", _types(f))
+
+    def test_invalid_octet_not_flagged(self):
+        # 999.1.1.1 은 유효 IP가 아니므로 제외
+        f = appsec.scan_source('x = "999.1.1.1"', "a.py", lang="python")
+        self.assertNotIn("sast_private_ip_hardcoded", _types(f))
+
+    def test_weak_crypto_des(self):
+        f = appsec.scan_source("cipher = DES.new(key)", "a.py", lang="python")
+        self.assertIn("sast_weak_crypto", _types(f))
+
+
+class TestSqlRules(unittest.TestCase):
+    def test_grant_all(self):
+        f = appsec.scan_source("GRANT ALL PRIVILEGES ON db.* TO 'app'@'x';", "s.sql", lang="sql")
+        self.assertIn("sast_sql_grant_all", _types(f))
+
+    def test_public_grant(self):
+        f = appsec.scan_source("CREATE USER 'a'@'%' IDENTIFIED BY 'plainpw';", "s.sql", lang="sql")
+        self.assertIn("sast_sql_public_grant", _types(f))
+
+    def test_xp_cmdshell_critical(self):
+        f = appsec.scan_source("EXEC xp_cmdshell 'whoami';", "s.sql", lang="sql")
+        self.assertIn("sast_sql_xp_cmdshell", _types(f))
+        finding = [x for x in f if x.issue_type == "sast_sql_xp_cmdshell"][0]
+        self.assertEqual(finding.severity, Severity.CRITICAL)
+
+    def test_plaintext_password(self):
+        f = appsec.scan_source("WHERE password = 'user_input'", "s.sql", lang="sql")
+        self.assertIn("sast_sql_plaintext_password", _types(f))
+
+
+class TestHtmlRules(unittest.TestCase):
+    def test_xss_innerhtml(self):
+        f = appsec.scan_source("el.innerHTML = userInput;", "x.html", lang="html")
+        self.assertIn("sast_xss_innerhtml", _types(f))
+
+    def test_js_url_scheme(self):
+        f = appsec.scan_source('<a href="javascript:doIt()">x</a>', "x.html", lang="html")
+        self.assertIn("sast_js_url_scheme", _types(f))
+
+    def test_target_blank_noopener(self):
+        f = appsec.scan_source('<a href="https://x.com" target="_blank">y</a>', "x.html", lang="html")
+        self.assertIn("sast_target_blank_noopener", _types(f))
+
+    def test_target_blank_with_noopener_ok(self):
+        f = appsec.scan_source('<a href="https://x.com" target="_blank" rel="noopener">y</a>',
+                               "x.html", lang="html")
+        self.assertNotIn("sast_target_blank_noopener", _types(f))
+
+    def test_inline_event_handler(self):
+        f = appsec.scan_source('<img src=x onerror="fetch(\'/x\')">', "x.html", lang="html")
+        self.assertIn("sast_inline_event_handler", _types(f))
+
+
+class TestLanguageDetection(unittest.TestCase):
+    def test_detect_by_extension(self):
+        self.assertEqual(appsec.detect_language("a.py", ""), "python")
+        self.assertEqual(appsec.detect_language("a.js", ""), "js")
+        self.assertEqual(appsec.detect_language("a.html", ""), "html")
+        self.assertEqual(appsec.detect_language("a.sql", ""), "sql")
+
+    def test_detect_by_content(self):
+        self.assertEqual(appsec.detect_language("", "<html><body>hi</body></html>"), "html")
+        self.assertEqual(appsec.detect_language("", "SELECT * FROM users WHERE id=1"), "sql")
+        self.assertEqual(appsec.detect_language("", "def foo():\n    print('hi')"), "python")
+
+    def test_detect_unknown(self):
+        self.assertEqual(appsec.detect_language("", "some plain text 123"), "unknown")
+
+    def test_language_filtering(self):
+        # SQL 규칙(grant_all)은 python으로 지정하면 적용되지 않아야 함
+        sql_line = "GRANT ALL PRIVILEGES ON db.* TO 'a'@'x';"
+        py = appsec.scan_source(sql_line, "a.py", lang="python")
+        self.assertNotIn("sast_sql_grant_all", _types(py))
+        # sql로 지정하면 적용됨
+        s = appsec.scan_source(sql_line, "s.sql", lang="sql")
+        self.assertIn("sast_sql_grant_all", _types(s))
+
+    def test_lang_all_applies_everything(self):
+        # lang="all"이면 언어 무관하게 SQL 규칙도 적용
+        f = appsec.scan_source("GRANT ALL PRIVILEGES ON db.* TO 'a'@'x';", "a.py", lang="all")
+        self.assertIn("sast_sql_grant_all", _types(f))
+
+    def test_unknown_applies_everything(self):
+        # 언어 미상이면 모든 규칙 적용(넓게 점검)
+        f = appsec.scan_source("GRANT ALL PRIVILEGES ON db.* TO 'a'@'x';", "", lang="auto")
+        self.assertIn("sast_sql_grant_all", _types(f))
 
 
 if __name__ == "__main__":

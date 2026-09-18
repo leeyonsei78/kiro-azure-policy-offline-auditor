@@ -457,6 +457,18 @@ deploy.bat "https://hooks.slack.com/services/XXX/YYY/ZZZ"</pre><button class="co
         <button data-p="azure" onclick="setAsPlat('azure')">Azure</button>
       </div>
     </div>
+    <div class="row" style="margin-top:8px" id="as-lang-wrap">
+      <span class="hint">언어(SAST):</span>
+      <select id="as-lang" class="search" style="max-width:220px">
+        <option value="auto">자동 감지(권장)</option>
+        <option value="python">Python</option>
+        <option value="js">JavaScript</option>
+        <option value="html">HTML</option>
+        <option value="sql">SQL</option>
+        <option value="all">전체 규칙 적용</option>
+      </select>
+      <span class="hint">파일을 올리면 확장자로 언어를 자동 판별합니다.</span>
+    </div>
     <label id="as-label" style="margin-top:10px">점검할 소스코드 붙여넣기</label>
     <textarea id="as-input" placeholder="예) app.py 등 소스코드를 붙여넣으세요. WAF 구성 점검은 'WAF 구성' 선택 후 WAF 정책 JSON을 붙여넣습니다."></textarea>
     <div class="row">
@@ -1066,7 +1078,7 @@ function renderIr(pb){
 }
 
 // ===== 앱 보안 점검(SAST/WAF) =====
-var AS_MODE='sast'; var AS_PLAT='aws';
+var AS_MODE='sast'; var AS_PLAT='aws'; var AS_FILENAME='';
 function setAsMode(m){
   AS_MODE=m;
   Array.prototype.forEach.call(document.querySelectorAll('#as-mode button'), function(b){
@@ -1080,6 +1092,9 @@ function setAsMode(m){
   // WAF 점검일 때만 플랫폼 선택이 의미 있음(표기)
   var show=(m!=='sast');
   pw.style.opacity=show?'1':'0.4'; pt.style.opacity=show?'1':'0.4';
+  // 언어 선택은 SAST가 포함될 때만 의미 있음
+  var lw=document.getElementById('as-lang-wrap');
+  if(lw) lw.style.opacity=(m==='waf')?'0.4':'1';
 }
 function setAsPlat(p){
   AS_PLAT=p;
@@ -1096,6 +1111,7 @@ function loadAsFile(){
   var r=new FileReader();
   r.onload=function(e){
     document.getElementById('as-input').value=e.target.result;
+    AS_FILENAME=f.name;
     if(meta) meta.textContent='불러옴: '+f.name+' ('+f.size+' bytes)';
   };
   r.onerror=function(){ errEl.textContent='파일 읽기에 실패했습니다.'; };
@@ -1105,15 +1121,18 @@ function clearAppsec(){
   document.getElementById('as-input').value='';
   document.getElementById('as-result').innerHTML='';
   document.getElementById('as-err').textContent='';
+  AS_FILENAME='';
   var m=document.getElementById('as-load-info'); if(m) m.textContent='';
 }
 async function runAppsec(){
   var errEl=document.getElementById('as-err'); errEl.textContent='';
   var text=document.getElementById('as-input').value;
   if(!text.trim()){ errEl.textContent='점검할 소스코드 또는 구성을 입력하세요.'; return; }
+  var langSel=document.getElementById('as-lang');
+  var lang=langSel?langSel.value:'auto';
   try{
     var resp=await fetch('/api/appsec',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({text:text, mode:AS_MODE, platform:AS_PLAT})});
+      body:JSON.stringify({text:text, mode:AS_MODE, platform:AS_PLAT, lang:lang, filename:AS_FILENAME})});
     var d=await resp.json();
     if(!d.ok){ errEl.textContent='점검 실패: '+(d.error||'알 수 없는 오류'); return; }
     renderAppsec(d);
@@ -1127,7 +1146,8 @@ function renderAppsec(d){
   var chips=order.filter(function(s){return cnt[s];}).map(function(s){
     return '<span class="sev '+s+'">'+s+' '+cnt[s]+'</span>';
   }).join(' ');
-  html+='<div class="ftop"><span class="ftitle" style="font-size:16px">점검 결과: 이슈 '+d.total+'건</span> '+chips+'</div>';
+  var langBadge = (d.lang && d.mode!=='waf') ? '<span class="code">언어: '+esc(d.lang)+'</span>' : '';
+  html+='<div class="ftop"><span class="ftitle" style="font-size:16px">점검 결과: 이슈 '+d.total+'건</span> '+langBadge+' '+chips+'</div>';
   if(!d.findings.length){
     html+='<div class="finding empty" style="margin-top:8px">탐지된 이슈가 없습니다. (규칙 기반 참고 결과)</div>';
   } else {
@@ -1312,7 +1332,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(e)}, status=500)
 
     def _handle_appsec(self):
-        """앱 보안 점검(간이 SAST / WAF). {text, mode, platform} 입력."""
+        """앱 보안 점검(간이 SAST / WAF). {text, mode, platform, lang, filename} 입력."""
         try:
             payload, err = self._read_payload()
             if err:
@@ -1321,8 +1341,9 @@ class Handler(BaseHTTPRequestHandler):
             text = payload.get("text", "")
             mode = (payload.get("mode") or "sast").lower()
             platform = (payload.get("platform") or "aws").lower()
+            lang = (payload.get("lang") or "auto").lower()
             result = appsec.run(text, filename=payload.get("filename", ""),
-                                platform=platform, mode=mode)
+                                platform=platform, mode=mode, lang=lang)
             self._send_json(result)
         except Exception as e:  # noqa: BLE001
             logger.exception("appsec 실패")

@@ -10,9 +10,14 @@
       켜져 있는지 '구성 점검'만 제공한다.
 
 기능:
-    - scan_source(text, filename=""): 소스코드 텍스트에서 위험 패턴 탐지 -> Finding 리스트.
+    - scan_source(text, filename="", lang="auto"): 소스코드 텍스트에서 위험 패턴 탐지 -> Finding 리스트.
     - check_waf(text, platform): WAF 구성 JSON을 받아 활성/룰셋 여부 점검 -> Finding 리스트.
     - run(text, filename, platform): 위 둘을 합쳐 결과 dict 반환(웹 UI/CLI 공용).
+    - detect_language(filename, text): 파일 확장자·내용으로 언어(python/js/html/sql) 추정.
+
+언어 태그(rule["lang"]):
+    python / js / html / sql / common(모든 언어에 적용). 스캔 시 감지된 언어 + common 규칙만
+    적용해 다른 언어에서의 오탐을 줄인다. lang="auto"면 자동 감지, "all"이면 전체 적용.
 """
 
 from __future__ import annotations
@@ -23,58 +28,41 @@ from typing import Any
 from .models import Finding, Severity
 
 # ---------------------------------------------------------------------------
-# 간이 SAST 규칙: (issue_type, 라벨, 정규식, 심각도, 설명, 개선방안, 취약예, 개선예)
-# 언어 우선순위: Python / JavaScript(Node) / 공통 설정. 오탐을 줄이기 위해 형태가
-# 비교적 뚜렷한 것만 포함한다. 각 규칙은 '줄 단위'로 매칭한다.
+# 간이 SAST 규칙 스키마:
+#   id, label, re(정규식), sev, why(설명), fix(개선), bad(취약예), good(개선예), lang
+# 각 규칙은 '줄 단위'로 매칭한다. 오탐을 줄이기 위해 형태가 비교적 뚜렷한 것만 포함한다.
 # ---------------------------------------------------------------------------
 _SAST_RULES: list[dict[str, Any]] = [
+    # ===================== 공통(common) =====================
     {
         "id": "hardcoded_secret",
         "label": "하드코딩된 비밀번호/키",
         "re": re.compile(r"""(?ix)(password|passwd|pwd|secret|api[_-]?key|token|access[_-]?key)\s*[=:]\s*['"][^'"]{4,}['"]"""),
-        "sev": "HIGH",
+        "sev": "HIGH", "lang": "common",
         "why": "소스코드에 비밀번호·API 키를 직접 적으면, 코드가 유출될 때 자격증명도 함께 노출됩니다.",
         "fix": "비밀값은 환경변수·비밀 관리 서비스(AWS Secrets Manager, Azure Key Vault)로 옮기고 코드에서 제거하세요.",
         "bad": 'password = "P@ssw0rd123"',
         "good": 'password = os.environ["DB_PASSWORD"]',
     },
     {
-        "id": "sql_injection",
-        "label": "SQL 인젝션 위험(문자열 결합 쿼리)",
-        "re": re.compile(r"""(?ix)(select|insert|update|delete)\s+.*(\+\s*\w+|%\s*\(|%s\s*%|\.format\(|f['"])"""),
-        "sev": "HIGH",
-        "why": "쿼리에 외부 입력을 문자열로 이어 붙이면 공격자가 쿼리를 조작(SQL 인젝션)할 수 있습니다.",
-        "fix": "파라미터 바인딩(플레이스홀더)이나 ORM을 사용하세요. 입력을 쿼리 문자열에 직접 넣지 마세요.",
-        "bad": 'cursor.execute("SELECT * FROM users WHERE id=" + uid)',
-        "good": 'cursor.execute("SELECT * FROM users WHERE id=%s", (uid,))',
-    },
-    {
-        "id": "os_command_exec",
-        "label": "OS 명령 실행(명령 인젝션 위험)",
-        "re": re.compile(r"""(?ix)(os\.system|os\.popen|subprocess\.(call|run|Popen)\s*\([^)]*shell\s*=\s*True|child_process\.(exec|execSync)\s*\()"""),
-        "sev": "HIGH",
-        "why": "외부 입력이 셸 명령에 들어가면 임의 명령이 실행(명령 인젝션)될 수 있습니다.",
-        "fix": "shell=True를 피하고 인자를 리스트로 전달하세요. 입력은 화이트리스트로 검증하세요.",
-        "bad": 'subprocess.run(f"ping {host}", shell=True)',
-        "good": 'subprocess.run(["ping", host])  # 리스트 인자, shell 미사용',
-    },
-    {
-        "id": "dangerous_eval",
-        "label": "eval/exec 등 동적 코드 실행",
-        "re": re.compile(r"""(?ix)(?<![.\w])(eval|exec)\s*\(|new\s+Function\s*\(|pickle\.loads\s*\(|yaml\.load\s*\((?![^)]*Loader)"""),
-        "sev": "HIGH",
-        "why": "eval/exec나 안전하지 않은 역직렬화는 외부 입력으로 임의 코드가 실행될 수 있습니다.",
-        "fix": "eval/exec 사용을 제거하고, 역직렬화는 안전한 방식(json, yaml.safe_load)을 쓰세요.",
-        "bad": "result = eval(user_input)",
-        "good": "import json; result = json.loads(user_input)",
+        "id": "private_ip_hardcoded",
+        "label": "하드코딩된 IP 주소",
+        "re": re.compile(r"""(?x)['"]?\b(?:\d{1,3}\.){3}\d{1,3}\b['"]?"""),
+        "sev": "LOW", "lang": "common",
+        "why": "소스에 IP를 직접 박으면 환경 이전·주소 변경 시 오류가 나고, 내부망 구조가 코드에 노출됩니다.",
+        "fix": "IP·엔드포인트는 환경변수·설정 파일·서비스 디스커버리로 분리하세요.",
+        "bad": 'DB_HOST = "192.168.10.25"',
+        "good": 'DB_HOST = os.environ["DB_HOST"]',
+        # 버전문자열(1.2.3.4 형태의 흔한 오탐) 완화: 4옥텟 모두 0~255여야 IP로 간주
+        "validate": "ipv4",
     },
     {
         "id": "weak_crypto",
         "label": "취약한 해시/암호 알고리즘",
-        "re": re.compile(r"""(?ix)(hashlib\.(md5|sha1)\s*\(|MessageDigest\.getInstance\s*\(\s*['"](MD5|SHA-1)['"]|createHash\s*\(\s*['"](md5|sha1)['"])"""),
-        "sev": "MEDIUM",
-        "why": "MD5·SHA-1은 충돌이 발견된 약한 알고리즘으로 무결성·비밀번호 보호에 부적합합니다.",
-        "fix": "SHA-256 이상을 쓰고, 비밀번호는 bcrypt·scrypt·argon2 같은 전용 해시를 사용하세요.",
+        "re": re.compile(r"""(?ix)(hashlib\.(md5|sha1)\s*\(|MessageDigest\.getInstance\s*\(\s*['"](MD5|SHA-1)['"]|createHash\s*\(\s*['"](md5|sha1)['"]|DES|RC4|ECB)"""),
+        "sev": "MEDIUM", "lang": "common",
+        "why": "MD5·SHA-1·DES·RC4·ECB는 취약한 알고리즘으로 무결성·기밀성 보호에 부적합합니다.",
+        "fix": "SHA-256 이상·AES-GCM을 쓰고, 비밀번호는 bcrypt·scrypt·argon2 전용 해시를 사용하세요.",
         "bad": "hashlib.md5(password.encode())",
         "good": "hashlib.sha256(data)  # 비밀번호는 bcrypt/argon2",
     },
@@ -82,7 +70,7 @@ _SAST_RULES: list[dict[str, Any]] = [
         "id": "insecure_random",
         "label": "예측 가능한 난수(보안용 부적합)",
         "re": re.compile(r"""(?ix)(?<![.\w])random\.(random|randint|choice|randrange)\s*\(|Math\.random\s*\("""),
-        "sev": "LOW",
+        "sev": "LOW", "lang": "common",
         "why": "일반 난수(random/Math.random)는 예측 가능해 토큰·비밀번호·세션에 쓰면 위험합니다.",
         "fix": "보안용 난수는 secrets 모듈(Python)·crypto.randomBytes(Node)를 사용하세요.",
         "bad": "token = random.randint(1000, 9999)",
@@ -92,21 +80,207 @@ _SAST_RULES: list[dict[str, Any]] = [
         "id": "tls_verify_disabled",
         "label": "TLS 인증서 검증 비활성화",
         "re": re.compile(r"""(?ix)(verify\s*=\s*False|rejectUnauthorized\s*:\s*false|CURLOPT_SSL_VERIFYPEER\s*,\s*(0|false)|InsecureSkipVerify\s*:\s*true)"""),
-        "sev": "MEDIUM",
+        "sev": "MEDIUM", "lang": "common",
         "why": "TLS 검증을 끄면 중간자 공격(MITM)에 노출되어 통신이 가로채기·변조될 수 있습니다.",
         "fix": "인증서 검증을 활성화(verify=True)하고, 사설 CA는 신뢰 저장소에 등록하세요.",
         "bad": "requests.get(url, verify=False)",
         "good": "requests.get(url)  # 기본값 verify=True",
     },
+
+    # ===================== 파이썬(python) =====================
+    {
+        "id": "os_command_exec",
+        "label": "OS 명령 실행(명령 인젝션 위험)",
+        "re": re.compile(r"""(?ix)(os\.system|os\.popen|subprocess\.(call|run|Popen)\s*\([^)]*shell\s*=\s*True|child_process\.(exec|execSync)\s*\()"""),
+        "sev": "HIGH", "lang": "python",
+        "why": "외부 입력이 셸 명령에 들어가면 임의 명령이 실행(명령 인젝션)될 수 있습니다.",
+        "fix": "shell=True를 피하고 인자를 리스트로 전달하세요. 입력은 화이트리스트로 검증하세요.",
+        "bad": 'subprocess.run(f"ping {host}", shell=True)',
+        "good": 'subprocess.run(["ping", host])  # 리스트 인자, shell 미사용',
+    },
+    {
+        "id": "dangerous_eval",
+        "label": "eval/exec 등 동적 코드 실행",
+        "re": re.compile(r"""(?ix)(?<![.\w])(eval|exec)\s*\(|new\s+Function\s*\(|pickle\.loads\s*\(|yaml\.load\s*\((?![^)]*Loader)"""),
+        "sev": "HIGH", "lang": "python",
+        "why": "eval/exec나 안전하지 않은 역직렬화는 외부 입력으로 임의 코드가 실행될 수 있습니다.",
+        "fix": "eval/exec 사용을 제거하고, 역직렬화는 안전한 방식(json, yaml.safe_load)을 쓰세요.",
+        "bad": "result = eval(user_input)",
+        "good": "import json; result = json.loads(user_input)",
+    },
     {
         "id": "debug_enabled",
         "label": "디버그 모드 활성화(운영 위험)",
         "re": re.compile(r"""(?ix)(debug\s*=\s*True|app\.run\([^)]*debug\s*=\s*True|FLASK_DEBUG\s*=\s*1)"""),
-        "sev": "LOW",
+        "sev": "LOW", "lang": "python",
         "why": "운영에서 디버그 모드가 켜지면 상세 오류·대화형 콘솔로 내부 정보가 노출될 수 있습니다.",
         "fix": "운영 환경에서는 디버그를 끄고(Debug=False), 오류 상세는 로그로만 남기세요.",
         "bad": "app.run(debug=True)",
         "good": "app.run(debug=False)  # 운영",
+    },
+    {
+        "id": "insecure_file_perms",
+        "label": "안전하지 않은 파일 권한(chmod 0777 등)",
+        "re": re.compile(r"""(?ix)(os\.chmod\s*\([^)]*0o?7[0-7]7|os\.chmod\s*\([^)]*0o?777|chmod\s+(-R\s+)?0?777|st_mode.*0o?777)"""),
+        "sev": "MEDIUM", "lang": "python",
+        "why": "0777(모두에게 읽기·쓰기·실행) 권한은 같은 시스템의 다른 사용자가 파일을 변조·실행할 수 있게 합니다.",
+        "fix": "필요한 최소 권한만 부여하세요(예: 0o600 소유자만, 0o640 그룹 읽기). 비밀 파일은 0o600 권장.",
+        "bad": "os.chmod(path, 0o777)",
+        "good": "os.chmod(path, 0o600)  # 소유자만 읽기/쓰기",
+    },
+    {
+        "id": "path_traversal",
+        "label": "경로 조작(Path Traversal) 위험",
+        "re": re.compile(r"""(?ix)(open|os\.path\.join|send_file|sendfile|os\.remove|shutil\.(copy|move|rmtree))\s*\([^)]*(request\.(args|form|values|GET|POST|params)|req\.(query|params|body)|input\(|sys\.argv)"""),
+        "sev": "HIGH", "lang": "python",
+        "why": "사용자 입력을 파일 경로에 그대로 쓰면 '../' 등으로 의도치 않은 파일에 접근·삭제할 수 있습니다.",
+        "fix": "허용 디렉터리를 정하고 os.path.realpath로 정규화 후 해당 경로 하위인지 검증하세요. 파일명은 화이트리스트로 제한.",
+        "bad": 'open(os.path.join(base, request.args["name"]))',
+        "good": 'p=os.path.realpath(os.path.join(base, name)); assert p.startswith(base_real)',
+    },
+    {
+        "id": "xxe_risk",
+        "label": "XXE 위험(안전하지 않은 XML 파서)",
+        "re": re.compile(r"""(?ix)(xml\.etree|xml\.dom\.minidom|xml\.sax|lxml\.etree|etree\.parse|parseString|minidom\.parse|resolve_entities\s*=\s*True|no_network\s*=\s*False)"""),
+        "sev": "MEDIUM", "lang": "python",
+        "why": "표준 XML 파서는 외부 엔터티(XXE)를 처리해 파일 유출·SSRF·DoS로 이어질 수 있습니다.",
+        "fix": "defusedxml 사용 또는 외부 엔터티/DTD 처리를 비활성화하세요(resolve_entities=False, no_network=True).",
+        "bad": "import xml.etree.ElementTree as ET; ET.parse(user_file)",
+        "good": "from defusedxml.ElementTree import parse; parse(user_file)",
+    },
+    {
+        "id": "assert_for_security",
+        "label": "보안 검사에 assert 사용",
+        "re": re.compile(r"""(?ix)^\s*assert\s+.*(auth|admin|permission|role|token|password|is_valid|verify)"""),
+        "sev": "LOW", "lang": "python",
+        "why": "assert는 최적화 실행(python -O)에서 통째로 제거됩니다. 인증·권한 검사를 assert로 하면 운영에서 무력화될 수 있습니다.",
+        "fix": "보안 검사는 if 문 + 예외 발생으로 구현하세요. assert는 개발용 불변식 확인에만 쓰세요.",
+        "bad": "assert user.is_admin, 'forbidden'",
+        "good": "if not user.is_admin: raise PermissionError('forbidden')",
+    },
+    {
+        "id": "insecure_tempfile",
+        "label": "안전하지 않은 임시파일 생성",
+        "re": re.compile(r"""(?ix)(tempfile\.mktemp\s*\(|/tmp/[A-Za-z0-9_.-]+\s*['"]?\s*[,)]|open\s*\(\s*['"]/tmp/)"""),
+        "sev": "LOW", "lang": "python",
+        "why": "예측 가능한 임시파일 경로나 mktemp는 경쟁 조건(TOCTOU)·심볼릭 링크 공격에 취약합니다.",
+        "fix": "tempfile.NamedTemporaryFile / mkstemp 로 안전하게 생성하세요.",
+        "bad": 'path = tempfile.mktemp()',
+        "good": "fd, path = tempfile.mkstemp()",
+    },
+    {
+        "id": "flask_ssl_none",
+        "label": "요청 검증 없는 서버 바인딩(0.0.0.0)",
+        "re": re.compile(r"""(?ix)(host\s*=\s*['"]0\.0\.0\.0['"]|app\.run\([^)]*['"]0\.0\.0\.0['"])"""),
+        "sev": "LOW", "lang": "python",
+        "why": "0.0.0.0 바인딩은 모든 인터페이스에 노출됩니다. 인증이 없으면 외부에서 접근될 수 있습니다.",
+        "fix": "로컬만 필요하면 127.0.0.1로 바인딩하고, 외부 노출은 인증·방화벽·리버스 프록시로 보호하세요.",
+        "bad": 'app.run(host="0.0.0.0")',
+        "good": 'app.run(host="127.0.0.1")  # 필요한 경우에만 외부 노출',
+    },
+
+    # ===================== SQL(sql) =====================
+    {
+        "id": "sql_injection",
+        "label": "SQL 인젝션 위험(문자열 결합 쿼리)",
+        "re": re.compile(r"""(?ix)(select|insert|update|delete)\s+.*(\+\s*\w+|%\s*\(|%s\s*%|\.format\(|f['"])"""),
+        "sev": "HIGH", "lang": "common",
+        "why": "쿼리에 외부 입력을 문자열로 이어 붙이면 공격자가 쿼리를 조작(SQL 인젝션)할 수 있습니다.",
+        "fix": "파라미터 바인딩(플레이스홀더)이나 ORM을 사용하세요. 입력을 쿼리 문자열에 직접 넣지 마세요.",
+        "bad": 'cursor.execute("SELECT * FROM users WHERE id=" + uid)',
+        "good": 'cursor.execute("SELECT * FROM users WHERE id=%s", (uid,))',
+    },
+    {
+        "id": "sql_grant_all",
+        "label": "과도한 권한 부여(GRANT ALL)",
+        "re": re.compile(r"""(?ix)grant\s+all(\s+privileges)?\s+on\s+.*\bto\b|with\s+grant\s+option|grant\s+all\s+to"""),
+        "sev": "HIGH", "lang": "sql",
+        "why": "GRANT ALL은 계정에 모든 권한을 줍니다. 계정 탈취 시 피해가 전면적으로 커집니다(최소권한 위반).",
+        "fix": "업무에 필요한 최소 권한(SELECT/INSERT 등)만 부여하고, 관리 권한은 분리하세요.",
+        "bad": "GRANT ALL PRIVILEGES ON db.* TO 'app'@'%';",
+        "good": "GRANT SELECT, INSERT ON db.orders TO 'app'@'10.0.%';",
+    },
+    {
+        "id": "sql_public_grant",
+        "label": "PUBLIC/모든 호스트에 권한 부여",
+        "re": re.compile(r"""(?ix)(to\s+public\b|to\s+'[^']*'@'%'|identified\s+by\s+['"][^'"]*['"]|create\s+user\s+.*@'%')"""),
+        "sev": "HIGH", "lang": "sql",
+        "why": "PUBLIC 또는 '%'(모든 호스트) 대상 권한 부여, 평문 비밀번호 지정은 누구나·어디서나 접근을 허용할 수 있습니다.",
+        "fix": "특정 사용자·특정 호스트(IP 대역)로 제한하고, 비밀번호는 스크립트에 평문으로 두지 마세요.",
+        "bad": "CREATE USER 'app'@'%' IDENTIFIED BY 'plainpw';",
+        "good": "CREATE USER 'app'@'10.0.0.%';  -- 호스트 제한, 비번은 별도 안전 주입",
+    },
+    {
+        "id": "sql_xp_cmdshell",
+        "label": "위험한 확장 프로시저(xp_cmdshell 등)",
+        "re": re.compile(r"""(?ix)(xp_cmdshell|sp_oacreate|sp_configure\s+['"]?xp_cmdshell|OPENROWSET|load_file\s*\(|into\s+outfile|into\s+dumpfile)"""),
+        "sev": "CRITICAL", "lang": "sql",
+        "why": "xp_cmdshell·load_file·INTO OUTFILE 등은 DB에서 OS 명령 실행·파일 읽기/쓰기가 가능해 서버 장악으로 이어집니다.",
+        "fix": "해당 기능을 비활성화하고(sp_configure 'xp_cmdshell',0), DB 계정에 파일·명령 실행 권한을 주지 마세요.",
+        "bad": "EXEC xp_cmdshell 'whoami';",
+        "good": "-- xp_cmdshell 비활성화 유지; 애플리케이션에서 처리",
+    },
+    {
+        "id": "sql_plaintext_password",
+        "label": "비밀번호 평문 저장/비교",
+        "re": re.compile(r"""(?ix)(password\s*(varchar|char|text)|where\s+password\s*=\s*['"]|set\s+password\s*=\s*['"][^'"]+['"])"""),
+        "sev": "HIGH", "lang": "sql",
+        "why": "비밀번호를 평문 컬럼에 저장하거나 평문으로 비교하면 DB 유출 시 즉시 계정이 탈취됩니다.",
+        "fix": "비밀번호는 bcrypt/argon2 등으로 해시해 저장하고, 애플리케이션에서 해시 비교하세요.",
+        "bad": "WHERE password = 'user_input'",
+        "good": "-- 해시 저장 후 앱에서 검증(bcrypt.checkpw)",
+    },
+
+    # ===================== HTML / 프론트엔드(html) =====================
+    {
+        "id": "xss_innerhtml",
+        "label": "XSS 위험(innerHTML/document.write에 동적 값)",
+        "re": re.compile(r"""(?ix)(\.innerHTML\s*=|\.outerHTML\s*=|document\.write(ln)?\s*\(|insertAdjacentHTML\s*\()"""),
+        "sev": "HIGH", "lang": "html",
+        "why": "사용자 입력을 innerHTML·document.write로 그대로 넣으면 스크립트가 실행(XSS)될 수 있습니다.",
+        "fix": "textContent/innerText로 넣거나, 프레임워크의 자동 이스케이프를 쓰고, 필요 시 DOMPurify로 정제하세요.",
+        "bad": "el.innerHTML = userInput;",
+        "good": "el.textContent = userInput;  // 또는 DOMPurify.sanitize(...)",
+    },
+    {
+        "id": "xss_jquery_html",
+        "label": "XSS 위험(jQuery .html()/append에 동적 값)",
+        "re": re.compile(r"""(?ix)\$\([^)]*\)\.(html|append|prepend|after|before)\s*\(\s*[^'"][^)]*(val\(|data\(|param|input|location|search)"""),
+        "sev": "HIGH", "lang": "html",
+        "why": "jQuery .html()/append 등에 사용자 값을 넣으면 XSS가 발생할 수 있습니다.",
+        "fix": ".text()로 넣거나 입력을 이스케이프/정제하세요.",
+        "bad": "$('#out').html(location.search);",
+        "good": "$('#out').text(value);",
+    },
+    {
+        "id": "js_url_scheme",
+        "label": "javascript: URL / 문자열 setTimeout",
+        "re": re.compile(r"""(?ix)(href\s*=\s*['"]?\s*javascript:|location(\.href)?\s*=\s*['"]javascript:|setTimeout\s*\(\s*['"]|setInterval\s*\(\s*['"])"""),
+        "sev": "MEDIUM", "lang": "html",
+        "why": "javascript: URL이나 문자열 인자 setTimeout/setInterval은 임의 스크립트 실행 통로가 됩니다.",
+        "fix": "javascript: URL을 제거하고, setTimeout에는 문자열 대신 함수를 전달하세요.",
+        "bad": '<a href="javascript:doIt()">',
+        "good": '<a href="#" onclick="doIt(); return false;">  // 또는 addEventListener',
+    },
+    {
+        "id": "target_blank_noopener",
+        "label": "target=_blank 에 rel=noopener 누락(탭 탈취)",
+        "re": re.compile(r"""(?ix)target\s*=\s*['"]_blank['"](?![^>]*rel\s*=\s*['"][^'"]*noopener)"""),
+        "sev": "LOW", "lang": "html",
+        "why": "target=_blank 링크는 rel=noopener가 없으면 새 창이 window.opener로 원본 페이지를 조작(탭 나빙)할 수 있습니다.",
+        "fix": 'target="_blank" 링크에는 rel="noopener noreferrer"를 추가하세요.',
+        "bad": '<a href="https://x.com" target="_blank">',
+        "good": '<a href="https://x.com" target="_blank" rel="noopener noreferrer">',
+    },
+    {
+        "id": "inline_event_handler",
+        "label": "인라인 이벤트 핸들러(onerror/onload 등)",
+        "re": re.compile(r"""(?ix)<[^>]+\son(error|load|click|mouseover|focus)\s*=\s*['"][^'"]*(document\.|window\.|eval|alert|fetch)"""),
+        "sev": "LOW", "lang": "html",
+        "why": "인라인 이벤트 핸들러는 XSS 표면을 넓히고 CSP 적용을 어렵게 합니다.",
+        "fix": "이벤트는 addEventListener로 분리하고, 콘텐츠 보안 정책(CSP)을 적용하세요.",
+        "bad": "<img src=x onerror=\"fetch('/steal')\">",
+        "good": "el.addEventListener('click', handler);  // + CSP",
     },
 ]
 
@@ -120,14 +294,76 @@ _WAF_ENABLED = re.compile(r"(?i)\"?(enabledstate|state|mode)\"?\s*[:=]\s*\"?(ena
 _WAF_MANAGED_RULES = re.compile(r"(?i)(managedrulegroup|managedrulesets?|owasp|coreruleset|crs|managed_rule_set)")
 
 
-def _mk_finding(rule: dict, filename: str, lineno: int, line: str) -> Finding:
+# 언어별 라벨(리포트 표기용)
+_LANG_LABEL = {"python": "Python", "js": "JavaScript", "html": "HTML", "sql": "SQL",
+               "common": "공통", "unknown": "일반"}
+
+# 파일 확장자 -> 언어
+_EXT_LANG = {
+    ".py": "python", ".pyw": "python",
+    ".js": "js", ".jsx": "js", ".ts": "js", ".tsx": "js", ".mjs": "js",
+    ".html": "html", ".htm": "html", ".vue": "html", ".svelte": "html",
+    ".sql": "sql", ".ddl": "sql",
+}
+
+_IPV4_RE = re.compile(r"\b((?:\d{1,3}\.){3}\d{1,3})\b")
+
+
+def detect_language(filename: str = "", text: str = "") -> str:
+    """파일 확장자·내용으로 언어를 추정한다. 실패 시 'unknown'.
+
+    'unknown'이면 스캔 시 모든 규칙을 적용(가장 넓게 점검)한다.
+    """
+    import os
+    ext = os.path.splitext(filename or "")[1].lower()
+    if ext in _EXT_LANG:
+        return _EXT_LANG[ext]
+    low = (text or "")[:4000].lower()
+    # 내용 기반 휴리스틱(뚜렷한 신호 위주)
+    if re.search(r"<\s*(html|!doctype|div|script|body|a\s|img\s)", low):
+        return "html"
+    if re.search(r"\b(select|insert|update|delete|create\s+table|grant|create\s+user)\b.*\b(from|into|table|to)\b", low):
+        return "sql"
+    if re.search(r"\b(def |import |from \w+ import|print\(|self\.)", low):
+        return "python"
+    if re.search(r"\b(function |const |let |var |=>|require\(|console\.log)", low):
+        return "js"
+    return "unknown"
+
+
+def _rule_applies(rule: dict, lang: str) -> bool:
+    """규칙이 현재 언어에 적용되는지. common은 항상, unknown/all이면 전체 적용."""
+    if lang in ("unknown", "all"):
+        return True
+    rlang = rule.get("lang", "common")
+    return rlang == "common" or rlang == lang
+
+
+def _false_positive(rule: dict, line: str, match: "re.Match") -> bool:
+    """규칙별 추가 검증으로 명백한 오탐을 걸러낸다."""
+    if rule.get("validate") == "ipv4":
+        # 매치 라인에서 IPv4를 찾아 4옥텟이 모두 0~255인지 확인(버전문자열 등 완화)
+        found = _IPV4_RE.search(line)
+        if not found:
+            return True
+        octets = found.group(1).split(".")
+        if any(not (o.isdigit() and 0 <= int(o) <= 255) for o in octets):
+            return True
+        # 0.0.0.0 / 127.0.0.1 / 255.255.255.255 같은 자리표시자·루프백은 IP 노출로 보지 않음
+        if found.group(1) in ("0.0.0.0", "127.0.0.1", "255.255.255.255", "1.2.3.4"):
+            return True
+    return False
+
+
+def _mk_finding(rule: dict, filename: str, lineno: int, line: str, lang: str = "") -> Finding:
     snippet = line.strip()
     if len(snippet) > 160:
         snippet = snippet[:160] + "…"
     loc = f"{filename}:{lineno}" if filename else f"line {lineno}"
+    lang_tag = _LANG_LABEL.get(rule.get("lang", "common"), "")
     return Finding(
         control_code="APP",
-        control_domain="애플리케이션 보안(간이 SAST)",
+        control_domain=f"애플리케이션 보안(간이 SAST · {lang_tag})",
         issue_type=f"sast_{rule['id']}",
         severity=Severity.from_name(rule["sev"]),
         title=f"{rule['label']} ({loc})",
@@ -144,24 +380,37 @@ def _mk_finding(rule: dict, filename: str, lineno: int, line: str) -> Finding:
     )
 
 
-def scan_source(text: str, filename: str = "") -> list[Finding]:
+def scan_source(text: str, filename: str = "", lang: str = "auto") -> list[Finding]:
     """소스코드 텍스트를 줄 단위로 스캔해 위험 패턴 Finding 목록을 반환.
 
-    주석 줄(#, //)로 시작하는 라인은 오탐을 줄이기 위해 건너뛴다(단순 휴리스틱).
+    Args:
+        text: 소스코드 텍스트.
+        filename: 파일명(언어 자동감지·위치표기에 사용).
+        lang: "auto"(자동감지) | "python" | "js" | "html" | "sql" | "all".
+
+    주석 줄(#, //, --, *, <!--)로 시작하는 라인은 오탐을 줄이기 위해 건너뛴다(단순 휴리스틱).
     """
     findings: list[Finding] = []
     if not text:
         return findings
+    lang = (lang or "auto").lower()
+    if lang == "auto":
+        lang = detect_language(filename, text)
+    applicable = [r for r in _SAST_RULES if _rule_applies(r, lang)]
     for i, raw in enumerate((text or "").splitlines(), start=1):
         stripped = raw.strip()
         if not stripped:
             continue
         # 순수 주석 줄은 스킵(오탐 감소). 코드 뒤 인라인 주석은 스캔 유지.
-        if stripped.startswith("#") or stripped.startswith("//") or stripped.startswith("*"):
+        # 파이썬 #, C/JS //, SQL --, HTML <!--, 블록주석 *
+        if (stripped.startswith("#") or stripped.startswith("//") or
+                stripped.startswith("*") or stripped.startswith("--") or
+                stripped.startswith("<!--")):
             continue
-        for rule in _SAST_RULES:
-            if rule["re"].search(raw):
-                findings.append(_mk_finding(rule, filename, i, raw))
+        for rule in applicable:
+            m = rule["re"].search(raw)
+            if m and not _false_positive(rule, raw, m):
+                findings.append(_mk_finding(rule, filename, i, raw, lang))
     return findings
 
 
@@ -248,23 +497,28 @@ def check_waf(text: str, platform: str = "aws") -> list[Finding]:
     return findings
 
 
-def run(text: str, filename: str = "", platform: str = "aws", mode: str = "sast") -> dict[str, Any]:
+def run(text: str, filename: str = "", platform: str = "aws", mode: str = "sast",
+        lang: str = "auto") -> dict[str, Any]:
     """웹 UI/CLI 공용 진입점.
 
     Args:
         text: 소스코드(SAST) 또는 WAF 구성(waf) 텍스트.
-        filename: 소스 파일명(있으면 위치 표기에 사용).
+        filename: 소스 파일명(있으면 언어 자동감지·위치 표기에 사용).
         platform: "aws" | "azure" (WAF 점검용).
         mode: "sast" | "waf" | "both".
+        lang: "auto"(자동감지) | "python" | "js" | "html" | "sql" | "all".
 
     Returns:
-        {ok, mode, total, severity_counts, findings:[to_dict...], notes:[...]}
+        {ok, mode, platform, lang, total, severity_counts, findings:[to_dict...], notes:[...]}
     """
     mode = (mode or "sast").lower()
+    lang = (lang or "auto").lower()
     findings: list[Finding] = []
     notes: list[str] = []
+    detected = None
     if mode in ("sast", "both"):
-        findings += scan_source(text, filename)
+        detected = detect_language(filename, text) if lang == "auto" else lang
+        findings += scan_source(text, filename, lang=lang)
     if mode in ("waf", "both"):
         findings += check_waf(text, platform)
 
@@ -273,6 +527,11 @@ def run(text: str, filename: str = "", platform: str = "aws", mode: str = "sast"
         counts[f.severity.name] = counts.get(f.severity.name, 0) + 1
 
     if mode in ("sast", "both"):
+        lang_note = _LANG_LABEL.get(detected or "unknown", "일반")
+        if detected in (None, "unknown", "all"):
+            notes.append("언어를 특정하지 못해 모든 규칙(Python/JS/HTML/SQL/공통)을 적용했습니다.")
+        else:
+            notes.append(f"감지된 언어: {lang_note} — 해당 언어 + 공통 규칙을 적용했습니다.")
         notes.append("간이 SAST는 정규식 기반 참고용 점검입니다(오탐/미탐 가능). 상용 정적분석을 대체하지 않습니다.")
     if mode in ("waf", "both"):
         notes.append("WAF 점검은 구성(설정) 확인이며, 실제 공격 시험(DAST)은 수행하지 않습니다.")
@@ -284,6 +543,7 @@ def run(text: str, filename: str = "", platform: str = "aws", mode: str = "sast"
         "ok": True,
         "mode": mode,
         "platform": platform,
+        "lang": detected or lang,
         "total": len(findings),
         "severity_counts": counts,
         "findings": [f.to_dict() for f in ordered],
