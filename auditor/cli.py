@@ -28,6 +28,7 @@ from .engine import analyze
 from .collector_script import build_script, script_filename
 from .knowledge_base import all_controls, collection_commands
 from .report import format_csv, format_html, format_text, format_xlsx
+from . import ir_playbook, appsec
 
 
 def _read_input(path: str | None) -> str:
@@ -75,6 +76,62 @@ def _print_commands(platform: str | None, as_json: bool) -> None:
     print("※ <NSG>·<RG>·<BUCKET> 등 자리표시자는 실제 값으로 바꿔 사용하세요.")
 
 
+def _print_ir(incident_type: str | None, platform: str, as_json: bool) -> None:
+    """사고 대응(IR) 플레이북 출력. incident_type 미지정 시 목록 출력."""
+    if not incident_type:
+        if as_json:
+            print(json.dumps(ir_playbook.list_incident_types(), ensure_ascii=False, indent=2))
+        else:
+            print("사고 대응(IR) 플레이북 — 지원 침해 유형")
+            print("=" * 60)
+            for t in ir_playbook.list_incident_types():
+                print(f"  {t['type']:<20} {t['name']} ({t['severity']})")
+            print("\n사용: python -m auditor --ir account_compromise --platform aws")
+        return
+    try:
+        pb = ir_playbook.build_playbook(incident_type, platform)
+    except KeyError:
+        print(f"알 수 없는 침해 유형: {incident_type}", file=sys.stderr)
+        print("가능한 유형: " + ", ".join(t["type"] for t in ir_playbook.list_incident_types()),
+              file=sys.stderr)
+        return
+    if as_json:
+        print(json.dumps(pb, ensure_ascii=False, indent=2))
+    else:
+        print(ir_playbook.render_text(pb))
+
+
+def _print_appsec(text: str, filename: str, platform: str, mode: str, as_json: bool,
+                  lang: str = "auto") -> int:
+    """앱 보안(간이 SAST/WAF) 점검 결과 출력. 이슈 있으면 1 반환."""
+    result = appsec.run(text, filename=filename, platform=platform, mode=mode, lang=lang)
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        label = {"sast": "간이 SAST(소스코드)", "waf": "WAF 구성 점검", "both": "앱 보안(SAST+WAF)"}
+        print(f"[{label.get(mode, mode)}] 이슈 {result['total']}건")
+        # KISA 시큐어코딩 7대 유형별 요약
+        if result.get("kisa_summary"):
+            print("KISA 시큐어코딩 유형별: " +
+                  ", ".join(f"{k['code']} {k['type']} {k['count']}건"
+                            for k in result["kisa_summary"]))
+        print("=" * 60)
+        for f in result["findings"]:
+            # description 앞줄에 [KISA Kn 유형] 약점명이 들어있으면 함께 표시
+            kisa_line = ""
+            desc = f.get("description") or ""
+            if desc.startswith("[KISA"):
+                kisa_line = desc.split("\n", 1)[0]
+            print(f"  [{f['severity']}] {f['title']}")
+            if kisa_line:
+                print(f"      {kisa_line}")
+            if f.get("recommendation"):
+                print(f"      → {f['recommendation']}")
+        for n in result["notes"]:
+            print(f"\n※ {n}")
+    return 1 if result["total"] else 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="auditor",
@@ -98,6 +155,15 @@ def main(argv=None) -> int:
     parser.add_argument("--web", action="store_true", help="웹 UI 실행")
     parser.add_argument("--host", default="127.0.0.1", help="웹 UI 호스트(--web)")
     parser.add_argument("--port", type=int, default=8080, help="웹 UI 포트(--web)")
+    parser.add_argument("--ir", nargs="?", const="", metavar="TYPE",
+                        help="사고 대응(IR) 플레이북 출력. 유형 생략 시 목록. 예) --ir account_compromise")
+    parser.add_argument("--sast", action="store_true",
+                        help="간이 SAST: 소스코드 파일(file/stdin)에서 위험 패턴 점검")
+    parser.add_argument("--waf", action="store_true",
+                        help="WAF 구성 점검: 입력(file/stdin)에서 WAF 활성·룰셋 여부 확인")
+    parser.add_argument("--lang", choices=["auto", "python", "js", "html", "sql", "all"],
+                        default="auto",
+                        help="--sast 대상 언어(기본 auto: 파일 확장자·내용으로 자동 감지)")
     args = parser.parse_args(argv)
 
     if args.web:
@@ -111,6 +177,26 @@ def main(argv=None) -> int:
     if args.commands:
         _print_commands(args.platform, args.json)
         return 0
+
+    # 사고 대응(IR) 플레이북: 유형 인자가 있거나 --ir 만 준 경우(목록).
+    if args.ir is not None:
+        _print_ir(args.ir or None, args.platform or "aws", args.json)
+        return 0
+
+    # 앱 보안 점검(SAST/WAF): 입력 텍스트 필요.
+    if args.sast or args.waf:
+        try:
+            text = _read_input(args.file)
+        except OSError as e:
+            print(f"파일을 읽을 수 없습니다: {e}", file=sys.stderr)
+            return 2
+        if not text.strip():
+            print("입력이 비었습니다. 점검할 소스코드/구성 파일을 지정하거나 stdin으로 전달하세요.",
+                  file=sys.stderr)
+            return 2
+        mode = "both" if (args.sast and args.waf) else ("waf" if args.waf else "sast")
+        return _print_appsec(text, args.file or "", args.platform or "aws", mode,
+                             args.json, lang=args.lang)
 
     if args.script:
         platform = args.platform or "azure"
