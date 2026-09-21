@@ -10,6 +10,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from auditor import appsec
+from auditor.appsec import _SAST_RULES, _KISA_TYPES
 from auditor.models import Severity
 
 
@@ -65,7 +66,8 @@ class TestSast(unittest.TestCase):
         f = appsec.scan_source('password = "abc123"', filename="app.py")
         self.assertEqual(len(f), 1)
         finding = f[0]
-        self.assertEqual(finding.control_code, "APP")
+        # control_code 에 KISA 유형코드가 붙는다(예: "APP·K2")
+        self.assertTrue(finding.control_code.startswith("APP"))
         self.assertEqual(finding.platform, "appsec")
         self.assertEqual(finding.severity, Severity.HIGH)
         self.assertIn("app.py", finding.location)
@@ -275,6 +277,76 @@ class TestLanguageDetection(unittest.TestCase):
         # 언어 미상이면 모든 규칙 적용(넓게 점검)
         f = appsec.scan_source("GRANT ALL PRIVILEGES ON db.* TO 'a'@'x';", "", lang="auto")
         self.assertIn("sast_sql_grant_all", _types(f))
+
+
+class TestNewWeaknessRules(unittest.TestCase):
+    """KISA 보강으로 추가된 누락 약점 규칙."""
+
+    def test_sensitive_info_logging(self):
+        f = appsec.scan_source('logger.info("login pw=" + password)', "a.py", lang="python")
+        self.assertIn("sast_sensitive_info_logging", _types(f))
+
+    def test_broad_except_pass(self):
+        f = appsec.scan_source("try:\n    verify(t)\nexcept:\n    pass", "a.py", lang="python")
+        self.assertIn("sast_broad_except_pass", _types(f))
+
+    def test_ssrf_risk(self):
+        f = appsec.scan_source('requests.get(request.args["url"])', "a.py", lang="python")
+        self.assertIn("sast_ssrf_risk", _types(f))
+
+    def test_open_redirect(self):
+        f = appsec.scan_source('return redirect(request.args["next"])', "a.py", lang="python")
+        self.assertIn("sast_open_redirect", _types(f))
+
+    def test_debug_code_leftover(self):
+        f = appsec.scan_source("console.log('token=', token);", "x.html", lang="html")
+        self.assertIn("sast_debug_code_leftover", _types(f))
+
+
+class TestKisaMapping(unittest.TestCase):
+    """KISA 시큐어코딩 매핑 검증."""
+
+    def test_every_rule_has_kisa(self):
+        # 모든 SAST 규칙에 KISA 매핑이 있어야 함
+        missing = [r["id"] for r in _SAST_RULES if not r.get("kisa")]
+        self.assertEqual(missing, [], f"KISA 매핑 누락: {missing}")
+
+    def test_kisa_codes_valid(self):
+        # kisa 코드가 정의된 7대 유형(K1~K7) 안에 있어야 함
+        for r in _SAST_RULES:
+            code = r["kisa"][0]
+            self.assertIn(code, _KISA_TYPES, f"{r['id']} 의 KISA 코드 {code} 미정의")
+
+    def test_kisa_type_name_helper(self):
+        self.assertEqual(appsec.kisa_type_name("K1"), "입력데이터 검증 및 표현")
+        self.assertEqual(appsec.kisa_type_name("K7"), "API 오용")
+        self.assertEqual(appsec.kisa_type_name("K99"), "")
+
+    def test_finding_control_code_has_kisa(self):
+        f = appsec.scan_source('password = "abc123"', "a.py", lang="python")
+        self.assertTrue(f[0].control_code.startswith("APP·K"))
+
+    def test_finding_description_has_kisa_prefix(self):
+        f = appsec.scan_source('password = "abc123"', "a.py", lang="python")
+        self.assertTrue(f[0].description.startswith("[KISA"))
+
+    def test_run_kisa_summary(self):
+        text = 'password = "abc123"\neval(x)\nrequests.get(request.args["u"])'
+        r = appsec.run(text, "a.py", mode="sast")
+        self.assertIn("kisa_summary", r)
+        summary = {k["code"]: k["count"] for k in r["kisa_summary"]}
+        # K2(하드코딩), K7(eval), K1(SSRF) 최소 포함
+        self.assertIn("K2", summary)
+        self.assertIn("K7", summary)
+        self.assertIn("K1", summary)
+        # 각 항목에 type 명칭이 채워져 있어야 함
+        for k in r["kisa_summary"]:
+            self.assertTrue(k["type"])
+
+    def test_waf_findings_have_no_kisa_summary_entries(self):
+        # WAF 점검 결과는 APP·Kn 형식이 아니므로 kisa_summary가 비어야 함
+        r = appsec.run("{}", mode="waf", platform="aws")
+        self.assertEqual(r["kisa_summary"], [])
 
 
 if __name__ == "__main__":

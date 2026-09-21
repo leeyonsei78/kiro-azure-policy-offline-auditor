@@ -1148,6 +1148,13 @@ function renderAppsec(d){
   }).join(' ');
   var langBadge = (d.lang && d.mode!=='waf') ? '<span class="code">언어: '+esc(d.lang)+'</span>' : '';
   html+='<div class="ftop"><span class="ftitle" style="font-size:16px">점검 결과: 이슈 '+d.total+'건</span> '+langBadge+' '+chips+'</div>';
+  // KISA 시큐어코딩 7대 유형별 요약
+  if(d.kisa_summary && d.kisa_summary.length){
+    var kchips=d.kisa_summary.map(function(k){
+      return '<span class="code">KISA '+esc(k.code)+' '+esc(k.type)+' — '+k.count+'건</span>';
+    }).join(' ');
+    html+='<div class="meta" style="margin-top:6px"><b>KISA 시큐어코딩 유형:</b> '+kchips+'</div>';
+  }
   if(!d.findings.length){
     html+='<div class="finding empty" style="margin-top:8px">탐지된 이슈가 없습니다. (규칙 기반 참고 결과)</div>';
   } else {
@@ -1156,7 +1163,7 @@ function renderAppsec(d){
       html+='<div class="ftop"><span class="sev '+esc(f.severity)+'">'+esc(f.severity)+'</span>'+
             '<span class="code">'+esc(f.control_code)+'</span>'+
             '<span class="ftitle">'+esc(f.title)+'</span></div>';
-      if(f.description) html+='<div class="meta" style="margin-top:6px">'+esc(f.description)+'</div>';
+      if(f.description) html+='<div class="meta" style="margin-top:6px">'+nl2br(esc(f.description))+'</div>';
       if(f.evidence) html+='<div class="exbad" style="margin-top:6px">근거: '+esc(f.evidence)+'</div>';
       if(f.recommendation) html+='<div class="fix" style="margin-top:6px"><b>✅ 개선:</b> '+esc(f.recommendation)+'</div>';
       if(f.bad_example) html+='<div class="exbad" style="margin-top:6px">✗ '+esc(f.bad_example)+'</div>';

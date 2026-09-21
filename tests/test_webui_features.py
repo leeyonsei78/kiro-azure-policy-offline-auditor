@@ -93,6 +93,19 @@ class TestWebUiEndpoints(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(d["ok"])
         self.assertEqual(d["total"], 2)
+        # KISA 요약이 응답에 포함되어야 함
+        self.assertIn("kisa_summary", d)
+
+    def test_appsec_kisa_summary(self):
+        # SAST 결과에 KISA 7대 유형 요약(코드·유형명·건수)이 담겨야 함
+        src = 'password = "abc123"\neval(x)\n'
+        status, d = self._post("/api/appsec", {"text": src, "mode": "sast", "lang": "python"})
+        self.assertEqual(status, 200)
+        codes = {k["code"] for k in d["kisa_summary"]}
+        self.assertIn("K2", codes)  # 하드코딩
+        self.assertIn("K7", codes)  # eval
+        for k in d["kisa_summary"]:
+            self.assertTrue(k["type"])  # 유형명 채워짐
 
     def test_appsec_waf(self):
         status, d = self._post("/api/appsec", {"text": "{}", "mode": "waf", "platform": "azure"})

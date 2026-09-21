@@ -30,10 +30,11 @@
 - 📈 **추세 비교**: 이전 점검 대비 **신규 발생·유지** 이슈와 점수 변화를 자동 비교(브라우저에 기준 보관, 폐쇄망 동작).
 - 🚨 **사고 대응(IR) 가이드**: 침해 유형(계정 탈취·데이터 노출·권한 오남용·악성코드·랜섬웨어·DDoS)을 고르면 ISMS-P 2.11에 맞춘 **6단계 대응 플레이북 + 증거수집 명령어 + 사고 보고서 양식**을 생성(안내용).
 - 🧪 **앱 보안 점검(간이 SAST + WAF)**: 소스코드에서 위험 패턴을 정규식으로 탐지(참고용)하고, WAF(웹 방화벽) 구성이 활성/관리형 룰셋 적용 상태인지 점검. **언어 자동 감지**(Python·JavaScript·HTML·SQL)로 해당 언어 규칙만 적용해 오탐을 줄입니다.
-  - **공통**: 하드코딩 비밀번호·키, 하드코딩 IP, 취약 암호(MD5/SHA1/DES/RC4/ECB), TLS 검증 해제, SQL 인젝션
-  - **Python**: 명령 실행(shell=True)·eval/exec, 안전하지 않은 파일 권한(0777), 경로 조작(Path Traversal), XXE, 보안 검사에 assert 사용, 안전하지 않은 임시파일, 0.0.0.0 바인딩
-  - **HTML/JS**: XSS(innerHTML·document.write·jQuery .html), javascript: URL·문자열 setTimeout, target=_blank noopener 누락, 인라인 이벤트 핸들러
+  - **공통**: 하드코딩 비밀번호·키, 하드코딩 IP, 취약 암호(MD5/SHA1/DES/RC4/ECB), TLS 검증 해제, SQL 인젝션, 민감정보 로그 출력
+  - **Python**: 명령 실행(shell=True)·eval/exec, 안전하지 않은 파일 권한(0777), 경로 조작(Path Traversal), XXE, SSRF, 검증 없는 리다이렉트(Open Redirect), 광범위한 예외 무시(except: pass), 보안 검사에 assert 사용, 안전하지 않은 임시파일, 0.0.0.0 바인딩
+  - **HTML/JS**: XSS(innerHTML·document.write·jQuery .html), javascript: URL·문자열 setTimeout, target=_blank noopener 누락, 인라인 이벤트 핸들러, 디버그 코드 잔존(console.log·debugger)
   - **SQL**: 과도한 권한(GRANT ALL)·PUBLIC 부여, xp_cmdshell 등 위험 프로시저, 비밀번호 평문 저장
+  - 🇰🇷 **KISA 시큐어코딩 매핑**: 각 탐지 항목을 KISA 소프트웨어 개발보안 가이드의 **7대 보안약점 유형**(입력데이터 검증 및 표현·보안 기능·시간 및 상태·에러 처리·캡슐화·API 오용)과 약점명에 연결하고, 결과에 **KISA 유형별 요약**을 함께 제공합니다.
 - 💾 **엑셀(.xlsx)/CSV/PDF 저장**: 결과를 진짜 엑셀 파일로 저장(줄바꿈·특수문자 보존, CSV 손실 없음) 또는 CSV·PDF(인쇄)로 내보내기. 모두 표준 라이브러리만 사용해 폐쇄망에서 동작.
 
 ## 왜 오프라인인가

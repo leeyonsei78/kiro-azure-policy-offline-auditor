@@ -110,9 +110,21 @@ def _print_appsec(text: str, filename: str, platform: str, mode: str, as_json: b
     else:
         label = {"sast": "간이 SAST(소스코드)", "waf": "WAF 구성 점검", "both": "앱 보안(SAST+WAF)"}
         print(f"[{label.get(mode, mode)}] 이슈 {result['total']}건")
+        # KISA 시큐어코딩 7대 유형별 요약
+        if result.get("kisa_summary"):
+            print("KISA 시큐어코딩 유형별: " +
+                  ", ".join(f"{k['code']} {k['type']} {k['count']}건"
+                            for k in result["kisa_summary"]))
         print("=" * 60)
         for f in result["findings"]:
+            # description 앞줄에 [KISA Kn 유형] 약점명이 들어있으면 함께 표시
+            kisa_line = ""
+            desc = f.get("description") or ""
+            if desc.startswith("[KISA"):
+                kisa_line = desc.split("\n", 1)[0]
             print(f"  [{f['severity']}] {f['title']}")
+            if kisa_line:
+                print(f"      {kisa_line}")
             if f.get("recommendation"):
                 print(f"      → {f['recommendation']}")
         for n in result["notes"]:
