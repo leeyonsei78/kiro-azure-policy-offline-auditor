@@ -106,6 +106,47 @@ class TestWaf(unittest.TestCase):
     def test_empty_input(self):
         self.assertEqual(appsec.check_waf(""), [])
 
+    # ── AWS WAFv2 상세(get-web-acl / list-resources-for-web-acl) 인식 ──
+    def test_aws_default_allow(self):
+        # DefaultAction=Allow + 관리형 룰 => waf_default_allow(MEDIUM)만, waf_not_enabled 오탐 없음
+        cfg = ('{"WebACL": {"DefaultAction": {"Allow": {}}, "Rules": '
+               '[{"Statement": {"ManagedRuleGroupStatement": {"Name": "AWSManagedRulesCommonRuleSet"}}}]}}')
+        t = _types(appsec.check_waf(cfg, platform="aws"))
+        self.assertIn("waf_default_allow", t)
+        self.assertNotIn("waf_not_enabled", t)
+
+    def test_aws_default_block_with_managed_ok(self):
+        # DefaultAction=Block + 관리형 룰 => 양호
+        cfg = ('{"WebACL": {"DefaultAction": {"Block": {}}, "Rules": '
+               '[{"Statement": {"ManagedRuleGroupStatement": {"Name": "AWSManagedRulesCommonRuleSet"}}}]}}')
+        self.assertEqual(_types(appsec.check_waf(cfg, platform="aws")), {"waf_ok"})
+
+    def test_aws_not_associated(self):
+        # list-resources-for-web-acl 결과가 빈 배열 => 미연결(HIGH)
+        cfg = ('{"WebACL": {"DefaultAction": {"Block": {}}, "Rules": '
+               '[{"Statement": {"ManagedRuleGroupStatement": {}}}]}, "ResourceArns": []}')
+        self.assertIn("waf_not_associated", _types(appsec.check_waf(cfg, platform="aws")))
+
+    def test_aws_associated_ok(self):
+        # 리소스에 연결되어 있으면 미연결로 잡지 않음
+        cfg = ('{"WebACL": {"DefaultAction": {"Block": {}}, "Rules": '
+               '[{"Statement": {"ManagedRuleGroupStatement": {}}}]}, '
+               '"ResourceArns": ["arn:aws:elasticloadbalancing:ap-northeast-2:1:loadbalancer/app/x"]}')
+        t = _types(appsec.check_waf(cfg, platform="aws"))
+        self.assertNotIn("waf_not_associated", t)
+
+    # ── Azure 상세(waf-policy show: managedRuleSets / policySettings) 인식 ──
+    def test_azure_detail_prevention_managed_ok(self):
+        cfg = ('{"policySettings": {"mode": "Prevention", "enabledState": "Enabled"}, '
+               '"managedRules": {"managedRuleSets": [{"ruleSetType": "Microsoft_DefaultRuleSet", '
+               '"ruleSetVersion": "2.1"}]}}')
+        self.assertEqual(_types(appsec.check_waf(cfg, platform="azure")), {"waf_ok"})
+
+    def test_azure_detail_detection_flagged(self):
+        cfg = ('{"policySettings": {"mode": "Detection"}, '
+               '"managedRules": {"managedRuleSets": [{"ruleSetType": "OWASP"}]}}')
+        self.assertIn("waf_not_enabled", _types(appsec.check_waf(cfg, platform="azure")))
+
 
 class TestRun(unittest.TestCase):
     def test_run_sast_mode(self):

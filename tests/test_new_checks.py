@@ -223,6 +223,18 @@ class NewCommandCoverageTest(unittest.TestCase):
         self.assertIn("22", az)
         self.assertIn("3389", az)
 
+    def test_aws_waf_detail_commands_present(self):
+        # WAF 상세 조회(get-web-acl / 리소스 연결) 명령이 수집 가이드에 포함되어야 함
+        aws = self._all_cmd_text("aws")
+        self.assertIn("wafv2 get-web-acl", aws)
+        self.assertIn("list-resources-for-web-acl", aws)
+
+    def test_azure_waf_detail_commands_present(self):
+        # WAF 정책 상세(show) 명령이 수집 가이드에 포함되어야 함
+        az = self._all_cmd_text("azure")
+        self.assertIn("front-door waf-policy show", az)
+        self.assertIn("application-gateway waf-policy show", az)
+
 
 if __name__ == "__main__":
     unittest.main()

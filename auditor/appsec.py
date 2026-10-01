@@ -360,11 +360,24 @@ _SAST_RULES: list[dict[str, Any]] = [
 # WAF 구성 점검용 키워드(입력 JSON/텍스트에서 활성 흔적을 찾는다).
 _WAF_ACTIVE_HINTS = re.compile(
     r"(?i)(webacl|web_acl|wafv2|aws_wafv2|frontdoor.*waf|application\s*gateway.*waf|"
-    r"\"?firewallpolicy\"?|managedrulegroup|owasp|managed_rule_set|policySettings)"
+    r"\"?firewallpolicy\"?|managedrulegroup|owasp|managed_rule_set|policySettings|defaultaction)"
 )
 # '차단(blocking)'으로 동작하는 상태만 활성으로 본다. Detection(탐지만)은 차단하지 않으므로 제외.
+# Azure: policySettings.mode = Prevention / state = Enabled. (Detection 은 제외)
 _WAF_ENABLED = re.compile(r"(?i)\"?(enabledstate|state|mode)\"?\s*[:=]\s*\"?(enabled|prevention|on)\b")
-_WAF_MANAGED_RULES = re.compile(r"(?i)(managedrulegroup|managedrulesets?|owasp|coreruleset|crs|managed_rule_set)")
+# 관리형 룰셋: Azure managedRules/ruleSetType(OWASP), AWS ManagedRuleGroupStatement/AWSManagedRules
+_WAF_MANAGED_RULES = re.compile(
+    r"(?i)(managedrulegroup(statement)?|managedrulesets?|managedrules|awsmanagedrules|"
+    r"owasp|coreruleset|crs|managed_rule_set|rulesettype)"
+)
+
+# ── AWS WAFv2 get-web-acl 상세 출력 인식 ──
+# DefaultAction: {"Allow": {}} 이면 기본 통과(위험), {"Block": {}} 이면 기본 차단.
+_AWS_DEFAULT_ALLOW = re.compile(r"(?i)\"?defaultaction\"?\s*[:=]\s*\{\s*\"?allow\"?")
+_AWS_DEFAULT_BLOCK = re.compile(r"(?i)\"?defaultaction\"?\s*[:=]\s*\{\s*\"?block\"?")
+# list-resources-for-web-acl 결과가 빈 배열이면 WebACL이 어떤 리소스에도 연결되지 않음.
+_AWS_NO_RESOURCES = re.compile(r"(?i)\"?resourcearns\"?\s*[:=]\s*\[\s*\]")
+_AWS_HAS_RESOURCES = re.compile(r"(?i)\"?resourcearns\"?\s*[:=]\s*\[\s*\"")
 
 
 # 언어별 라벨(리포트 표기용)
@@ -512,6 +525,18 @@ def check_waf(text: str, platform: str = "aws") -> list[Finding]:
     has_hint = bool(_WAF_ACTIVE_HINTS.search(text))
     enabled = bool(_WAF_ENABLED.search(text))
     managed = bool(_WAF_MANAGED_RULES.search(text))
+    # AWS WAFv2 상세 신호
+    aws_default_allow = bool(_AWS_DEFAULT_ALLOW.search(text))
+    aws_default_block = bool(_AWS_DEFAULT_BLOCK.search(text))
+    aws_no_resources = bool(_AWS_NO_RESOURCES.search(text)) and not bool(_AWS_HAS_RESOURCES.search(text))
+    # AWS는 mode(Prevention/Detection) 개념이 없고 DefaultAction·룰 액션으로 차단을 판단한다.
+    # DefaultAction 신호가 있으면 AWS 상세 출력으로 보고, mode 기반 'waf_not_enabled'는 건너뛴다.
+    aws_defaultaction_present = aws_default_allow or aws_default_block
+    if aws_default_block:
+        enabled = True
+    if aws_defaultaction_present:
+        # DefaultAction:Allow 는 별도 waf_default_allow(MEDIUM)로 다루므로 여기선 enabled 처리.
+        enabled = True
 
     if not has_hint:
         findings.append(Finding(
@@ -563,6 +588,40 @@ def check_waf(text: str, platform: str = "aws") -> list[Finding]:
             platform=platform,
             why="관리형 룰셋 없이 커스텀 룰만으로는 알려진 웹 공격을 폭넓게 막기 어렵습니다.",
             how_to_fix="AWS: AWSManagedRulesCommonRuleSet 등 추가. Azure: Managed Rule Set(OWASP 3.2 등) 지정.",
+        ))
+
+    # AWS WAFv2: DefaultAction 이 Allow 면 룰에 안 걸린 요청은 기본 통과(위험).
+    if aws_default_allow and not aws_default_block:
+        findings.append(Finding(
+            control_code="2.6.7",
+            control_domain="접근통제(경계 보안)",
+            issue_type="waf_default_allow",
+            severity=Severity.MEDIUM,
+            title="AWS WebACL 기본 동작(DefaultAction)이 Allow — 미탐지 요청 기본 통과",
+            description="WebACL의 DefaultAction이 Allow로 설정되어, 룰에 걸리지 않은 요청은 그대로 통과합니다.",
+            recommendation="차단형(allow-list) 운영이 목적이 아니라면, 룰 매칭 시 Block 액션을 확실히 두고 필요 시 DefaultAction 검토. 화이트리스트 모델이면 의도된 설정인지 확인하세요.",
+            evidence="(DefaultAction: Allow 확인)",
+            resource="(AWS WebACL)",
+            platform=platform,
+            why="DefaultAction이 Allow면 룰이 놓친 공격은 애플리케이션까지 도달합니다.",
+            how_to_fix="AWS: 룰 액션을 Block으로 두고, 관리형 룰그룹의 오버라이드가 Count로만 되어 있지 않은지 확인하세요.",
+        ))
+
+    # AWS WAFv2: WebACL 이 어떤 리소스에도 연결되지 않으면 실효성이 없음.
+    if aws_no_resources:
+        findings.append(Finding(
+            control_code="2.6.7",
+            control_domain="접근통제(경계 보안)",
+            issue_type="waf_not_associated",
+            severity=Severity.HIGH,
+            title="AWS WebACL이 어떤 리소스에도 연결되지 않음(미적용)",
+            description="list-resources-for-web-acl 결과가 비어 있어, WebACL이 ALB/CloudFront/API Gateway 등에 연결되지 않았습니다.",
+            recommendation="보호할 리소스(ALB·CloudFront·API GW)에 WebACL을 연결하세요. 연결되지 않은 WebACL은 트래픽을 전혀 검사하지 못합니다.",
+            evidence="(ResourceArns: [] — 연결된 리소스 없음)",
+            resource="(AWS WebACL)",
+            platform=platform,
+            why="WebACL이 리소스에 연결되지 않으면 정의된 룰이 실제 트래픽에 적용되지 않습니다.",
+            how_to_fix="AWS: aws wafv2 associate-web-acl 로 대상 리소스에 연결(REGIONAL) 또는 CloudFront 배포에 지정.",
         ))
 
     if enabled and managed and not findings:
