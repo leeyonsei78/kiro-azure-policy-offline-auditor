@@ -306,13 +306,13 @@ CONTROLS: list[dict] = [
             "alert"
         ],
         "azure": {
-            "cmd": "az security alert list --query \"[?status=='Active']\"\naz security auto-provisioning-setting list\naz network application-gateway waf-policy list --query \"[].{name:name, mode:policySettings.mode, state:policySettings.state}\" -o table\naz network front-door waf-policy list -g RESOURCE_GROUP --query \"[].{name:name, mode:policySettings.mode}\" -o table",
-            "criteria": "Defender for Cloud Active Alert이 다수 미해결 상태로 누적됨, 자동 프로비저닝(모니터링 에이전트 배포)이 비활성화되어 일부 리소스가 모니터링 사각지대에 있음",
+            "cmd": "az security alert list --query \"[?status=='Active']\"\naz security auto-provisioning-setting list\naz network application-gateway waf-policy list --query \"[].{name:name, mode:policySettings.mode, state:policySettings.state}\" -o table\naz network front-door waf-policy list -g RESOURCE_GROUP --query \"[].{name:name, mode:policySettings.mode}\" -o table\naz network front-door waf-policy show -g RESOURCE_GROUP -n POLICY_NAME -o json\naz network application-gateway waf-policy show -g RESOURCE_GROUP -n POLICY_NAME -o json",
+            "criteria": "Defender for Cloud Active Alert이 다수 미해결 상태로 누적됨, 자동 프로비저닝(모니터링 에이전트 배포)이 비활성화되어 일부 리소스가 모니터링 사각지대에 있음. WAF 정책이 Detection(탐지) 모드이거나 관리형 룰셋(OWASP)이 적용되지 않음",
             "fix": "Defender for Cloud 전체 플랜과 Auto-provisioning 활성화, Microsoft Sentinel 연동으로 상관분석·자동대응(Playbook) 구성, Active Alert 대응 SLA 수립"
         },
         "aws": {
-            "cmd": "aws guardduty list-detectors\naws guardduty get-detector --detector-id DETECTOR_ID\naws guardduty list-findings --detector-id DETECTOR_ID\naws wafv2 list-web-acls --scope REGIONAL --query \"WebACLs[*].[Name,Id]\"\naws wafv2 list-web-acls --scope CLOUDFRONT --query \"WebACLs[*].[Name,Id]\"",
-            "criteria": "GuardDuty가 비활성화되어 있음, 활성화된 경우에도 High·Critical Finding이 장기간 확인·대응되지 않고 누적됨",
+            "cmd": "aws guardduty list-detectors\naws guardduty get-detector --detector-id DETECTOR_ID\naws guardduty list-findings --detector-id DETECTOR_ID\naws wafv2 list-web-acls --scope REGIONAL --query \"WebACLs[*].[Name,Id]\"\naws wafv2 list-web-acls --scope CLOUDFRONT --query \"WebACLs[*].[Name,Id]\"\naws wafv2 get-web-acl --scope REGIONAL --name WEBACL_NAME --id WEBACL_ID\naws wafv2 list-resources-for-web-acl --web-acl-arn WEBACL_ARN",
+            "criteria": "GuardDuty가 비활성화되어 있음, 활성화된 경우에도 High·Critical Finding이 장기간 확인·대응되지 않고 누적됨. WAF WebACL의 기본 동작(DefaultAction)이 Allow이거나 관리형 룰그룹(AWSManagedRules)이 적용되지 않음, WebACL이 ALB/CloudFront/API GW에 연결되지 않음",
             "fix": "전 계정·리전에 GuardDuty 활성화(Organizations 위임 관리자로 중앙화), Finding을 EventBridge+SNS 또는 SOAR로 자동 알림·대응 연계, 위협 인텔리전스 룰셋 정기 갱신"
         }
     },

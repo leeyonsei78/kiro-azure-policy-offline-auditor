@@ -29,7 +29,8 @@
 - 🗺️ **MITRE ATT&CK 매핑**: 각 이슈를 공격 기법(예: T1190 Exploit Public-Facing Application)에 연결해 위협 관점으로 이해.
 - 📈 **추세 비교**: 이전 점검 대비 **신규 발생·유지** 이슈와 점수 변화를 자동 비교(브라우저에 기준 보관, 폐쇄망 동작).
 - 🚨 **사고 대응(IR) 가이드**: 침해 유형(계정 탈취·데이터 노출·권한 오남용·악성코드·랜섬웨어·DDoS)을 고르면 ISMS-P 2.11에 맞춘 **6단계 대응 플레이북 + 증거수집 명령어 + 사고 보고서 양식**을 생성(안내용).
-- 🧪 **앱 보안 점검(간이 SAST + WAF)**: 소스코드에서 위험 패턴을 정규식으로 탐지(참고용)하고, WAF(웹 방화벽) 구성이 활성/관리형 룰셋 적용 상태인지 점검. **언어 자동 감지**(Python·JavaScript·HTML·SQL)로 해당 언어 규칙만 적용해 오탐을 줄입니다.
+- 🧪 **앱 보안 점검(간이 SAST + WAF)**: 소스코드에서 위험 패턴을 정규식으로 탐지(참고용)하고, WAF(웹 방화벽) 구성을 점검. **언어 자동 감지**(Python·JavaScript·HTML·SQL)로 해당 언어 규칙만 적용해 오탐을 줄입니다.
+  - **WAF 상세 점검**: 활성/Prevention 모드·관리형 룰셋(OWASP) 적용 여부에 더해, **AWS WebACL 기본 동작(DefaultAction=Allow) 과 리소스 미연결(미적용)** 까지 점검합니다. 수집 명령어 가이드에 WAF 상세 조회 명령(AWS `wafv2 get-web-acl`·`list-resources-for-web-acl`, Azure `front-door`/`application-gateway waf-policy show`)이 포함됩니다.
   - **공통**: 하드코딩 비밀번호·키, 하드코딩 IP, 취약 암호(MD5/SHA1/DES/RC4/ECB), TLS 검증 해제, SQL 인젝션, 민감정보 로그 출력
   - **Python**: 명령 실행(shell=True)·eval/exec, 안전하지 않은 파일 권한(0777), 경로 조작(Path Traversal), XXE, SSRF, 검증 없는 리다이렉트(Open Redirect), 광범위한 예외 무시(except: pass), 보안 검사에 assert 사용, 안전하지 않은 임시파일, 0.0.0.0 바인딩
   - **HTML/JS**: XSS(innerHTML·document.write·jQuery .html), javascript: URL·문자열 setTimeout, target=_blank noopener 누락, 인라인 이벤트 핸들러, 디버그 코드 잔존(console.log·debugger)
